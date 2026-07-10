@@ -1,0 +1,22 @@
+FROM swe-pi-base:latest
+
+# Install Node.js (need root for apt)
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+USER agent
+
+# Install Pi coding agent (need root for global npm)
+USER root
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+USER agent
+
+# Create agent subdirectory and copy configs there (Pi expects ~/.pi/agent/)
+RUN mkdir -p /home/agent/.pi/agent
+COPY --chown=agent:agent .pi/settings.json .pi/models.json .pi/auth.json /home/agent/.pi/agent/
+COPY --chown=agent:agent .pi/npm/ /home/agent/.pi/npm/
+
+ENTRYPOINT ["/bin/bash"]

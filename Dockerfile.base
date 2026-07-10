@@ -1,0 +1,17 @@
+FROM python:3.10-slim
+
+# Install system deps + Docker CLI for DinD
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    docker-cli \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install SWE-bench
+RUN pip install --no-cache-dir swebench
+
+# Create workspace and agent user
+RUN useradd -m -s /bin/bash agent
+WORKDIR /home/agent/workspace
+USER agent

@@ -1,0 +1,7 @@
+{
+  "network": {
+    "localServices": [
+      { "hostname": "localhost", "port": 11434 }
+    ]
+  }
+}

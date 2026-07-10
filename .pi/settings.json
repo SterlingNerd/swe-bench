@@ -1,0 +1,17 @@
+{
+  "lastChangelogVersion": "0.80.3",
+  "theme": "dark",
+  "defaultProvider": "local",
+  "defaultModel": "qwen3.6-35b-a3b",
+  "defaultThinkingLevel": "high",
+  "retry": {
+    "enabled": true,
+    "maxRetries": 5,
+    "baseDelayMs": 15000,
+    "provider": {
+      "maxRetryDelayMs": 600000
+    }
+  },
+  "packages": [],
+  "hideThinkingBlock": true
+}

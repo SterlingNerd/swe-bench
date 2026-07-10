@@ -1,0 +1,44 @@
+{
+  "providers": {
+    "local": {
+      "_note": "llamacpp key 'local-key' is bogus and safe to publish. Do not treat as real credentials.",
+      "name": "Local Llama",
+      "baseUrl": "http://host.docker.internal:11434/v1",
+      "apiKey": "local-key",
+      "api": "openai-completions",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "models": [
+        {
+          "id": "qwen3.6-35b-a3b",
+          "name": "Qwen 3.6 36B A3B",
+          "reasoning": true,
+          "input": ["text"],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "contextWindow": 256000,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": "low",
+            "low": "medium",
+            "medium": "high",
+            "high": "max",
+            "xhigh": null
+          },
+          "compat": {
+            "requiresToolResultName": false,
+            "supportsDeveloperRole": true,
+            "supportsReasoningEffort": true,
+            "thinkingFormat": "openrouter"
+          }
+        }
+      ]
+    }
+  },
+  "defaultModel": "qwen3.6-35b-a3b"
+}
