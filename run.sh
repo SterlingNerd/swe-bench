@@ -399,7 +399,6 @@ do_interactive() {
         --memory-swap 8g \
         --pids-limit 500 \
         --tmpfs /tmp:rw,noexec,nosuid,size=2g \
-        --tmpfs /home/agent/workspace:rw,noexec,nosuid,size=4g \
         --cap-drop ALL \
         --cap-add NET_RAW \
         --security-opt no-new-privileges:true \
