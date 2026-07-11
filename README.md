@@ -27,20 +27,19 @@ This repo sets up an isolated evaluation environment where:
 swe-bench/
 ├── README.md                      # This file
 ├── docker-compose.yml             # Container orchestration (interactive mode)
-├── .pi/                           # Pi agent config (mounted into containers)
+├── .pi/                           # Agent config (mounted into containers)
 │   ├── settings.json              # Provider, model, retry settings
 │   ├── models.json                # Local llama.cpp provider definition
 │   └── auth.json                  # API keys (read-only mount)
 │
-├── containers/                    # Docker image definitions
+├── agents/pi/                     # Pi agent container definition
 │   ├── Dockerfile.base            # Base: Python 3.10 + swebench + pyenv + system deps
 │   ├── Dockerfile.pi              # Pi agent on top of base (Node.js + pi CLI)
 │   └── entrypoint.sh              # Container entrypoint script
 │
 └── orchestration/                 # Host-side scripts
     ├── run.sh                     # Build images + start interactive container
-    ├── harness.sh                 # Automated headless runner (--all, --list, per-instance)
-    └── swe-bench.sh               # Legacy helper (clone, prompts, eval)
+    └── harness.sh                 # Automated headless runner (--all, --list, per-instance)
 ```
 
 ## Architecture
@@ -119,6 +118,37 @@ The harness runs pi headlessly against any subset of instances:
 ```
 
 All results (patches, sessions, eval logs) persist in `outputs/<instance_id>/` after containers stop.
+
+## How run.sh and harness.sh work
+
+### `run.sh` — Interactive container
+Builds the Docker images (if missing) and starts an **interactive** container where you can manually run the Pi agent. Use this when you want to:
+- Debug an instance by hand
+- Run the agent interactively with full terminal access
+- Test prompts before automating
+
+```bash
+./orchestration/run.sh
+# → drops you into a shell inside the sandboxed container
+```
+
+### `harness.sh` — Automated headless runner
+Runs Pi **non-interactively** (`pi -p`) against specific instances or all 500. Each instance gets its own container, runs headlessly, and saves results to disk. Use this for:
+- Batch evaluation of many instances
+- Reproducible runs with full session capture
+- Comparing agent performance across the suite
+
+```bash
+./orchestration/harness.sh django__django-11039 pytest-dev__pytest-7407
+# → clones repos, runs pi -p headlessly, extracts patch, evaluates, saves results
+```
+
+### Interaction between them
+- Both use the same Docker images (`swe-pi-base`, `swe-pi-sandbox`)
+- `run.sh` builds images on-demand; `harness.sh` expects them to exist (runs pre-flight check)
+- `run.sh` mounts workspace for interactive use; `harness.sh` mounts workspace for persistent output
+- Results from `harness.sh` persist in `outputs/` even after containers are removed
+- You can use `run.sh` to debug a failing instance, then re-run it with `harness.sh`
 
 ## Configuration
 

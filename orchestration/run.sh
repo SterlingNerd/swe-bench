@@ -8,7 +8,7 @@ CONTAINER="pi_swe_evaluator"
 # Build base image (SWE-bench + workspace)
 if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
     echo "Building base image '$BASE_IMAGE'..."
-    docker build -f ../containers/Dockerfile.base -t "$BASE_IMAGE" ..
+    docker build -f ../agents/pi/Dockerfile.base -t "$BASE_IMAGE" ..
 else
     echo "Base image '$BASE_IMAGE' already exists."
 fi
@@ -16,7 +16,7 @@ fi
 # Build Pi image (on top of base)
 if ! docker image inspect "$PI_IMAGE" >/dev/null 2>&1; then
     echo "Building Pi image '$PI_IMAGE'..."
-    docker build -f ../containers/Dockerfile.pi -t "$PI_IMAGE" ..
+    docker build -f ../agents/pi/Dockerfile.pi -t "$PI_IMAGE" ..
 else
     echo "Pi image '$PI_IMAGE' already exists."
 fi
