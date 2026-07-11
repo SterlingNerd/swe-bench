@@ -7,6 +7,7 @@
 #   ./run.sh --index             Fetch and cache problem listings from HuggingFace
 #   ./run.sh --list [filter]     List problems (optional grep filter)
 #   ./run.sh --build             Build all Docker images
+#   ./run.sh --interactive       Start interactive container for manual debugging
 #   ./run.sh --run <agent> <id>  Run an agent against a specific instance
 #   ./run.sh --run-all <agent>   Run agent against all 500 instances
 # ==============================================================================
@@ -91,6 +92,7 @@ Examples:
   ./run.sh --index
   ./run.sh --list "django"
   ./run.sh --build
+  ./run.sh --interactive
   ./run.sh --run pi django__django-11039
   ./run.sh --run-all pi
 EOF
@@ -247,6 +249,36 @@ for inst in data:
 }
 
 # ==============================================================================
+# INTERACTIVE — start interactive container for manual debugging
+# ==============================================================================
+do_interactive() {
+    local agent="${1:-pi}"
+    local image_name="swe-${agent}"
+
+    if ! docker image inspect "$image_name" >/dev/null 2>&1; then
+        echo "ERROR: Image '${image_name}' not found. Run './run.sh --build' first."
+        exit 1
+    fi
+
+    echo "Starting interactive container for '${agent}'..."
+    docker run -it \
+        --name "pi_swe_evaluator" \
+        --memory 8g \
+        --memory-swap 8g \
+        --pids-limit 500 \
+        --tmpfs /tmp:rw,noexec,nosuid,size=2g \
+        --tmpfs /home/agent/workspace:rw,noexec,nosuid,size=4g \
+        --cap-drop ALL \
+        --cap-add NET_RAW \
+        --security-opt no-new-privileges:true \
+        --add-host host.docker.internal:host-gateway \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v "${WORKSPACE_DIR}:/home/agent/workspace:rw" \
+        -v "${REPO_ROOT}/agents/${agent}/.pi/auth.json:/home/agent/.pi/auth.json:ro" \
+        "$image_name"
+}
+
+# ==============================================================================
 # STATUS — show completion status
 # ==============================================================================
 do_status() {
@@ -314,6 +346,9 @@ case "$1" in
         ;;
     --status)
         do_status
+        ;;
+    --interactive|-i)
+        do_interactive "${2:-pi}"
         ;;
     *)
         echo "Unknown option: $1"
