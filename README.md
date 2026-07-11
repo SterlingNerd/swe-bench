@@ -47,7 +47,7 @@ Builds `swe-base` (shared infrastructure) + `swe-pi` (Pi agent on top).
 ./run.sh --run pi django__django-11039
 ```
 
-Clones the repo, runs Pi headlessly, extracts the patch, evaluates it. Results persist in `outputs/django__django-11039/`.
+Clones the repo, runs Pi headlessly, and extracts the patch. Results persist in `outputs/django__django-11039/`. Run `./run.sh --eval pi` separately to evaluate.
 
 ### 4. Run against all instances
 
@@ -78,7 +78,7 @@ Contains everything any agent container needs:
 Layers the Pi coding agent on top of base:
 - Node.js + `pi` CLI
 - Pi config (provider, model, auth keys mounted at runtime)
-- Generic entrypoint that handles clone → run → extract → eval
+- Generic entrypoint that handles clone → run agent → extract patch (evaluation is done via `--eval`)
 
 ### Entrypoint (shared across agents)
 The entrypoint script is generic — any agent container (pi, codex, claude) can use it:
@@ -98,7 +98,7 @@ outputs/<instance_id>/
 ├── session.jsonl            # Full pi session (tool calls, responses)
 ├── patch.diff               # Git diff of all changes made
 ├── result.json              # {"status": "resolved|failed|no_patch", "elapsed_seconds": N}
-└── eval/
+└── eval/                  # (created by --eval)
     ├── predictions.json     # SWE-bench JSON input
     └── harness.log          # Full evaluation output
 ```
