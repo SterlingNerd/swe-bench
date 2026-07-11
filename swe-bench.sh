@@ -23,25 +23,27 @@ declare -A PROMPTS=(
 # FUNCTIONS
 # ==============================================================================
 show_help() {
-    echo "Usage: ./compare_agents.sh [OPTIONS]"
+    echo "Usage: ./swe-bench.sh [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --install   Install swebench python package via pip"
-    echo "  --clone     Clone all 5 reference repositories into a ./repos directory"
+    echo "  --clone     Clone all 5 reference repositories into ./workspace/repos/"
     echo "  --prompts   Print out clean copy-paste prompts for your agents"
     echo "  --eval      Pack loose .patch files and execute the SWE-bench evaluation"
     echo "  --help      Show this help menu"
+    echo ""
+    echo "Note: swebench is pre-installed in the base image."
 }
 
 do_install() {
-    echo "=== Installing SWE-bench ==="
-    pip install swebench
+    echo "=== SWE-bench is already baked into the base image ==="
+    echo "$(python -c 'import swebench; print(swebench.__version__)' 2>/dev/null || echo 'version unknown')"
 }
 
 do_clone() {
-    echo "=== Cloning Repositories into ./repos/ ==="
-    mkdir -p repos
-    cd repos || exit 1
+    local workspace_dir="${WORKSPACE_DIR:-/home/agent/workspace}"
+    echo "=== Cloning Repositories into ${workspace_dir}/repos/ ==="
+    mkdir -p "${workspace_dir}/repos"
+    cd "${workspace_dir}/repos" || exit 1
     for instance_id in "${!REPOS[@]}"; do
         repo_url=${REPOS[$instance_id]}
         # Strip instance ID tail to get clean directory name
@@ -71,15 +73,24 @@ do_prompts() {
 }
 
 do_eval() {
-    echo "=== Packing Patches and Running Evaluation ==="
+    local workspace_dir="${WORKSPACE_DIR:-/home/agent/workspace}"
+    local output_dir="${workspace_dir}/outputs"
+    local patches_dir="${output_dir}/patches"
+    local eval_dir="${output_dir}/eval"
 
-    # 1. Create scaffolding template if it doesn't exist
-    if [ ! -d "patches" ]; then
-        mkdir -p patches/local patches/friend
-        echo "Created 'patches/local/' and 'patches/friend/' directories."
-        echo "Drop your agent's loose .patch files in there named exactly by instance_id."
-        echo "Example: patches/local/django__django-11039.patch"
-        echo "Please populate these directories and re-run with --eval."
+    echo "=== Packing Patches and Running Evaluation ==="
+    echo "Output directory: ${output_dir}"
+
+    # 1. Create output scaffolding if it doesn't exist
+    if [ ! -d "${patches_dir}/local" ]; then
+        mkdir -p "${patches_dir}/local" "${patches_dir}/friend" "${eval_dir}"
+        echo "Created output directories:"
+        echo "  ${patches_dir}/local/   — drop agent patches here"
+        echo "  ${patches_dir}/friend/  — drop friend patches here"
+        echo "  ${eval_dir}/            — evaluation results go here"
+        echo ""
+        echo "Example: ${patches_dir}/local/django__django-11039.patch"
+        echo "Populate these and re-run with --eval."
         exit 0
     fi
 
@@ -117,28 +128,35 @@ EOF
         echo -e "\n]" >> "$output_file"
     }
 
-    # Package local and friend inputs into JSON
-    package_json "patches/local" "local_predictions.json" "local_llm_agent"
-    package_json "patches/friend" "friend_predictions.json" "friend_codex_agent"
+    # Package local and friend inputs into JSON (save in eval dir)
+    package_json "${patches_dir}/local" "${eval_dir}/local_predictions.json" "local_llm_agent"
+    package_json "${patches_dir}/friend" "${eval_dir}/friend_predictions.json" "friend_codex_agent"
 
     # 2. Execute evaluations inside SWE-bench via Docker
-    if [ -f "local_predictions.json" ]; then
+    if [ -f "${eval_dir}/local_predictions.json" ]; then
         echo "Running evaluation for Local LLM Agent..."
         python -m swebench.harness.run_evaluation \
             --dataset_name princeton-nlp/SWE-bench_Verified \
-            --predictions_path ./local_predictions.json \
+            --predictions_path "${eval_dir}/local_predictions.json" \
             --max_workers 2 \
-            --namespace ""
+            --namespace "" \
+            2>&1 | tee "${eval_dir}/local_eval.log"
     fi
 
-    if [ -f "friend_predictions.json" ]; then
+    if [ -f "${eval_dir}/friend_predictions.json" ]; then
         echo "Running evaluation for Friend's Codex Agent..."
         python -m swebench.harness.run_evaluation \
             --dataset_name princeton-nlp/SWE-bench_Verified \
-            --predictions_path ./friend_predictions.json \
+            --predictions_path "${eval_dir}/friend_predictions.json" \
             --max_workers 2 \
-            --namespace ""
+            --namespace "" \
+            2>&1 | tee "${eval_dir}/friend_eval.log"
     fi
+
+    echo ""
+    echo "=== Results saved to ${output_dir}/ ==="
+    echo "  Patches:   ${patches_dir}/"
+    echo "  Eval:      ${eval_dir}/"
 }
 
 # ==============================================================================

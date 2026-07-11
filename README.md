@@ -63,31 +63,40 @@ The evaluation container is intentionally locked down:
 ```
 
 This builds two images:
-- **`swe-pi-base`** — Python 3.10 + SWE-bench + workspace setup
+- **`swe-pi-base`** — Python 3.10 + swebench + pyenv (7 Python versions) + system deps + workspace
 - **`swe-pi-sandbox`** — base + Node.js + Pi coding agent
 
-### 2. Run the agent
+The base image includes all system dependencies, build tools, and common Python packages needed by the SWE-bench Verified suite. Repos are cloned at runtime.
 
+### 2. Run the agent (interactive)
+
+```bash
+./run.sh
+```
 The container starts interactively with the Pi coding agent ready to go.
 
-### 3. Prepare patches
+### 3. Automated harness (recommended)
+
+The new harness runs pi headlessly against any subset of instances:
 
 ```bash
-./swe-bench.sh --install   # pip install swebench (if not already in image)
-./swe-bench.sh --clone     # clone all 5 repos into ./repos/
-./swe-bench.sh --prompts   # print copy-paste prompts for the agent
+# List available instances
+./harness.sh --list "django"
+
+# Show problem details
+./harness.sh --info django__django-11039
+
+# Run specific instances
+./harness.sh django__django-11039 pytest-dev__pytest-7407
+
+# Run all 500 verified instances
+./harness.sh --all
+
+# Check status of completed runs
+./harness.sh --status
 ```
 
-### 4. Evaluate
-
-After the agent produces `.patch` files:
-
-```bash
-# Place patches in patches/local/<instance_id>.patch
-./swe-bench.sh --eval
-```
-
-This packages loose patch files into SWE-bench JSON format and runs the official evaluation harness against `princeton-nlp/SWE-bench_Verified`.
+All results (patches, sessions, eval logs) persist in `outputs/<instance_id>/` after containers stop.
 
 ## Configuration
 

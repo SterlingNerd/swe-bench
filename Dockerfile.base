@@ -1,17 +1,72 @@
 FROM python:3.10-slim
 
-# Install system deps + Docker CLI for DinD
+# ==============================================================================
+# SYSTEM DEPS — baked in to save 2-5 min per instance during eval
+# ==============================================================================
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build tools needed by every Python project
+    gcc \
+    make \
+    cmake \
+    # Core tools
     curl \
     git \
+    wget \
+    # Docker-in-Docker
     docker-cli \
     docker.io \
+    # SWE-bench Verified suite system deps (from MAP_REPO_VERSION_TO_SPECS)
+    imagemagick \
+    ffmpeg \
+    graphviz \
+    libfreetype6-dev \
+    pkg-config \
+    texlive texlive-fonts-recommended texlive-latex-extra texlive-luatex texlive-xetex \
+    libenchant-2-dev \
+    hunspell-en-us \
+    locales \
+    ghostscript \
     && rm -rf /var/lib/apt/lists/*
 
-# Install SWE-bench
-RUN pip install --no-cache-dir swebench
+# ==============================================================================
+# MULTIPLE PYTHON VERSIONS — needed because Verified spans 3.5..3.11
+# ==============================================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+        wget curl llvm libncursesw5-dev xz-utils tk-dev libxml2-dev \
+        libxmlsec1-dev libffi-dev liblzma-dev && rm -rf /var/lib/apt/lists/*
 
-# Create workspace and agent user
+# pyenv — install all 7 Python versions used by Verified
+ENV PYENV_ROOT=/opt/pyenv \
+    PATH="/opt/pyenv/bin:/opt/pyenv/shims:$PATH"
+RUN git clone --depth 1 https://github.com/pyenv/pyenv.git "$PYENV_ROOT" \
+    && pyenv install 3.5.10 \
+    && pyenv install 3.6.15 \
+    && pyenv install 3.7.17 \
+    && pyenv install 3.8.20 \
+    && pyenv install 3.9.23 \
+    && pyenv install 3.10.16 \
+    && pyenv install 3.11.11 \
+    && pyenv global 3.5.10 3.6.15 3.7.17 3.8.20 3.9.23 3.10.16 3.11.11 \
+    && chmod -R a+rx "$PYENV_ROOT"
+
+# ==============================================================================
+# SWE-BENCH + COMMON TOOLING — shared across many instances
+# ==============================================================================
+RUN pip install --no-cache-dir swebench \
+    # Common test runners (latest compatible versions)
+    tox==4.16.0 \
+    tox-current-env==0.0.11 \
+    pytest \
+    # Common build/runtime deps used across projects
+    cython \
+    mpmath==1.3.0 \
+    flake8-comprehensions \
+    && rm -rf /root/.cache/pip
+
+# ==============================================================================
+# WORKSPACE + AGENT USER
+# ==============================================================================
 RUN useradd -m -s /bin/bash agent
 WORKDIR /home/agent/workspace
 USER agent
