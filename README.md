@@ -7,7 +7,6 @@ A locked-down Docker sandbox for running coding agents against **SWE-bench Verif
 ```
 swe-bench/
 ├── README.md                      # This file
-├── docker-compose.yml             # Container orchestration (interactive mode)
 ├── run.sh                         # Unified orchestrator (--index, --list, --build, --run)
 │
 ├── agents/base/                   # Shared base image (not agent-specific)

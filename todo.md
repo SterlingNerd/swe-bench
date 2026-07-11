@@ -109,5 +109,5 @@ Fix: use process substitution `while read ...; do done < <(fetch_dataset | ...)`
 both explicitly and in the loop. Harmless redundancy.
 Fix: skip `base` in the agent loop (or build it only in the loop).
 
-### [ ] 13. Stale README reference to deleted `docker-compose.yml` (`README.md:10`)
+### [x] 13. ~~Stale README reference to deleted `docker-compose.yml` (`README.md:10`)~~
 Git history removed the compose file; README still lists it. Update docs.
