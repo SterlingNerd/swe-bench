@@ -53,10 +53,10 @@ RUN git clone --depth 1 https://github.com/pyenv/pyenv.git "$PYENV_ROOT" \
 # ==============================================================================
 # SWE-BENCH + COMMON TOOLING — shared across many instances
 # ==============================================================================
-RUN pip install --no-cache-dir swebench \
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | /usr/local/bin/python3 - && /usr/local/bin/pip install --no-cache-dir swebench \
     # Common test runners (latest compatible versions)
-    tox==4.16.0 \
-    tox-current-env==0.0.11 \
+    tox>=4.0 \
+    tox-current-env \
     pytest \
     # Common build/runtime deps used across projects
     cython \

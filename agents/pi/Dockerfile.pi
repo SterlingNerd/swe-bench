@@ -10,15 +10,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-USER agent
+USER root
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+USER agent
 
 # Copy Pi config (mounted into container at runtime)
+USER root
 RUN mkdir -p /home/agent/.pi/agent
 COPY --chown=agent:agent .pi/settings.json .pi/models.json /home/agent/.pi/agent/
 COPY --chown=agent:agent .pi/npm/ /home/agent/.pi/npm/
+RUN chown -R agent:agent /home/agent/.pi /home/agent/workspace
 
 # Entrypoint: generic clone → run agent → extract patch → eval
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+USER agent
 ENTRYPOINT ["/entrypoint.sh"]

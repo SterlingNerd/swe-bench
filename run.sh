@@ -23,7 +23,7 @@ set -euo pipefail
 # CONFIGURATION
 # ==============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$SCRIPT_DIR"
 AGENTS_DIR="${REPO_ROOT}/agents"
 OUTPUT_DIR="${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}/outputs"
 WORKSPACE_DIR="${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}"
@@ -146,7 +146,7 @@ do_build() {
     # Build base image
     if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
         echo "Building ${BASE_IMAGE}..."
-        docker build -f "${AGENTS_DIR}/base/Dockerfile.base" -t "$BASE_IMAGE" "${REPO_ROOT}"
+        docker build -f "${AGENTS_DIR}/base/Dockerfile.base" -t "$BASE_IMAGE" "${AGENTS_DIR}/base/"
     else
         echo "${BASE_IMAGE} already exists."
     fi

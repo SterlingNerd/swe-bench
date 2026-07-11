@@ -20,8 +20,7 @@ PROBLEM_STATEMENT="${4:?Missing problem_statement}"
 WORKSPACE="/home/agent/workspace"
 REPOS_DIR="${WORKSPACE}/repos"
 OUTPUT_DIR="${WORKSPACE}/outputs/${INSTANCE_ID}"
-export SESSION_ID="${INSTANCE_ID}"
-AGENT_CMD="pi -p --session-dir /tmp/pi-sessions --session-id ${SESSION_ID}"
+AGENT_CMD="pi -p --session-dir /tmp/pi-sessions"
 
 echo "=============================================================================="
 echo "SWE-bench Agent: ${INSTANCE_ID}"
@@ -29,6 +28,9 @@ echo "==========================================================================
 
 # Create output directory
 mkdir -p "${OUTPUT_DIR}/eval"
+
+# Verification: write hello world
+echo "Hello from pi container at $(date)" > "${OUTPUT_DIR}/hello.txt"
 
 # Save problem metadata
 cat > "${OUTPUT_DIR}/meta.json" <<EOF
