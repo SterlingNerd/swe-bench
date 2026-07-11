@@ -21,7 +21,7 @@ swe-bench/
 │   ├── Dockerfile.pi              # Pi agent on top of base (Node.js + pi CLI)
 │   └── entrypoint.sh              # Generic clone → run agent → extract patch → eval
 │
-└── auth.json                      # API keys (mounted into containers at runtime)
+
 ```
 
 ## Quick Start
