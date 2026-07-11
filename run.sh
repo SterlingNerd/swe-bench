@@ -326,29 +326,14 @@ with open('${tmp_preds}', 'w') as f:
 print(f'Collected {len(results)} patches')
 " "${instance_ids[@]}"
 
-    # Run evaluation with Docker access
-    docker run --rm \
-        --name "swe_eval_${agent}" \
-        --memory 8g \
-        --memory-swap 8g \
-        --pids-limit 500 \
-        --tmpfs /tmp:rw,noexec,nosuid,size=2g \
-        --cap-drop ALL \
-        --cap-add NET_RAW \
-        --security-opt no-new-privileges:true \
-        --add-host host.docker.internal:host-gateway \
-        -v /var/run/docker.sock:/var/run/docker.sock \
-        -v "${eval_dir}:/home/agent/outputs:ro" \
-        -v "${tmp_preds}:/tmp/predictions.json:ro" \
-        "$image_name" \
-        bash -c "
-python3 -m swebench.harness.run_evaluation \\
-    --dataset_name princeton-nlp/SWE-bench_Verified \\
-    --predictions_path /tmp/predictions.json \\
-    --max_workers 1 \\
-    --namespace '' \\
-    2>&1 | tee /home/agent/eval.log
-"
+    # Run evaluation directly on the host (swebench harness creates its own
+    # test containers as needed — no need to wrap in another container).
+    python3 -m swebench.harness.run_evaluation \
+        --dataset_name princeton-nlp/SWE-bench_Verified \
+        --predictions_path "$tmp_preds" \
+        --max_workers 1 \
+        --namespace '' \
+        2>&1 | tee "${eval_dir}/eval.log"
 
     rm -f "$tmp_preds"
 }
@@ -377,7 +362,6 @@ do_interactive() {
         --cap-add NET_RAW \
         --security-opt no-new-privileges:true \
         --add-host host.docker.internal:host-gateway \
-        -v /var/run/docker.sock:/var/run/docker.sock \
         -v "${WORKSPACE_DIR}:/home/agent/workspace:rw" \
         -v "${REPO_ROOT}/agents/${agent}/.pi/auth.json:/home/agent/.pi/auth.json:ro" \
         "$image_name"

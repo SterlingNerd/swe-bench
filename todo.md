@@ -67,12 +67,14 @@ Fix: add `--read-only --tmpfs /home/agent/.cache:rw,...` (and any other
 writable paths the agent needs) to the `--run` / `--interactive` `docker run`
 commands, or remove the claim from the README.
 
-### [ ] 6. `--interactive` grants host root via Docker socket (`run.sh:275`)
+### [x] 6. ~~`--interactive` grants host root via Docker socket (`run.sh:275`)~~
 Mounting `/var/run/docker.sock` lets the container (and the agent inside it)
 control the host Docker daemon = full host root.
 
-Fix: document the trust assumption prominently, or scope it (e.g. don't use
-`--interactive` for untrusted input), or use DinD instead of the host socket.
+Fix: removed the Docker socket mount from `do_interactive` (it doesn't need
+Docker access). Also changed `do_eval` to run directly on the host instead of
+wrapping it in a container — the swebench harness creates its own test
+containers as needed.
 
 ### [ ] 7. Committed credential-shaped `auth.json` is dead/unused (`auth.json`)
 Root `auth.json` has `"key": "asdfasdf"`, is committed, but `run.sh` mounts
