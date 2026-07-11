@@ -3,6 +3,7 @@
 # SWE-bench Agent Entrypoint — generic clone → run → extract → eval
 #
 # Usage:
+#   /entrypoint.sh --interactive          Drop into interactive shell
 #   /entrypoint.sh <instance_id> <repo_url> <base_commit> <problem_statement>
 #
 # This script is shared across agent containers (pi, codex, claude, etc.).
@@ -11,6 +12,12 @@
 # ==============================================================================
 
 set -euo pipefail
+
+# Interactive mode: drop into shell for debugging
+if [ "${1:-}" = "--interactive" ]; then
+    echo "Starting interactive shell..."
+    exec bash
+fi
 
 INSTANCE_ID="${1:?Usage: $0 <instance_id> <repo_url> <base_commit> <problem_statement>}"
 REPO_URL="${2:?Missing repo_url}"

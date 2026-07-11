@@ -393,7 +393,9 @@ do_interactive() {
     fi
 
     echo "Starting interactive container for '${agent}'..."
-    docker run -it \
+    local DOCKER_RUN="docker run"
+    [ -t 0 ] && DOCKER_RUN="$DOCKER_RUN -t"  # allocate TTY only if stdin is a terminal
+    $DOCKER_RUN -i \
         --name "pi_swe_evaluator" \
         --memory 8g \
         --memory-swap 8g \
@@ -405,7 +407,7 @@ do_interactive() {
         --add-host host.docker.internal:host-gateway \
         -v "${WORKSPACE_DIR}:/home/agent/workspace:rw" \
         -v "${REPO_ROOT}/agents/${agent}/.pi/auth.json:/home/agent/.pi/auth.json:ro" \
-        "$image_name"
+        "$image_name" --interactive
 }
 
 # ==============================================================================
