@@ -78,33 +78,85 @@ sys.exit(1)
 # ==============================================================================
 show_help() {
     cat <<EOF
-Usage: ./run.sh [OPTIONS]
+$(basename "$0") — SWE-bench Orchestrator
+Unified build, index, list, run, evaluate, and inspect workflow for SWE-bench.
 
-Commands:
-  --index                Fetch and cache problem listings from HuggingFace
-  --list [filter]        List problems (optional grep filter on any field)
-  --build                Build all Docker images (base + all agents)
-  --run <agent> <id>     Run an agent against a specific instance
-                         agent: pi, codex, claude, etc. (folder name under agents/)
-                         id: instance_id (e.g., django__django-11039)
-                         Collects patch to outputs/<id>/ — no Docker needed.
-  --run-all <agent>      Run agent against all 500 verified instances
-                         Collects patches to outputs/<id>/ — no Docker needed.
-  --eval <agent>         Evaluate collected patches for an agent
-                         Runs swebench harness with Docker access.
+USAGE
+  $(basename "$0") [COMMAND] [ARGS]
+  $(basename "$0") --help            Show this help (also printed when run with no args)
 
-Environment:
-  SWE_OUTPUT_DIR         Output directory (default: ./outputs)
-  SWE_WORKSPACE_DIR      Workspace directory (default: ./workspace)
+COMMANDS
+  --index
+      Fetch the SWE-bench_Verified dataset from HuggingFace and cache it
+      locally at /tmp/swe_verified_cache.json. Required before --list, --run,
+      --run-all, and --eval (run it once; subsequent runs reuse the cache).
 
-Examples:
-  ./run.sh --index
-  ./run.sh --list "django"
-  ./run.sh --build
-  ./run.sh --interactive
-  ./run.sh --run pi django__django-11039
-  ./run.sh --run-all pi
-  ./run.sh --eval pi
+  --list [FILTER]
+      Print all cached instances (instance_id, repo, version, difficulty),
+      sorted by repo then version. Optional FILTER is a case-insensitive
+      substring match against any field (e.g. a repo name or instance id).
+
+  --build
+      Build the Docker images: the shared 'swe-base' image plus one image per
+      agent folder under agents/ (named 'swe-<agent>'). Existing images are
+      skipped. Run this before --run, --run-all, --eval, or --interactive.
+
+  --run <AGENT> <INSTANCE_ID>
+      Run an agent against a single instance. AGENT is a folder name under
+      agents/ (e.g. pi, codex, claude). INSTANCE_ID is like django__django-11039.
+      The agent runs inside its Docker image and writes a patch; the patch is
+      collected to <workspace>/outputs/<INSTANCE_ID>/.
+      Note: this only produces a patch — it does NOT run the test harness.
+
+  --run-all <AGENT>
+      Run an agent against every cached instance (all 500 verified instances),
+      collecting one patch per instance to <workspace>/outputs/<INSTANCE_ID>/.
+      Long-running: consider running in the background.
+
+  --eval <AGENT>
+      Evaluate the patches collected for AGENT in a previous --run/--run-all.
+      Builds predictions.json from the collected patch.diff files and runs the
+      swebench evaluation harness (which spins up its own test containers).
+      Writes per-instance result.json (resolved/failed/no_patch) and eval.log.
+
+  --status
+      Summarize progress of collected runs: totals plus per-instance status
+      (resolved / failed / no patch / unknown) read from result.json files.
+
+  --interactive [AGENT]
+      Start an interactive shell inside the agent's Docker image for manual
+      debugging. AGENT defaults to 'pi' if not given.
+
+ENVIRONMENT
+  SWE_WORKSPACE_DIR
+      Root of the workspace (default: ./workspace). The outputs directory and
+      shared volume are derived from it:
+        workspace  = \${SWE_WORKSPACE_DIR:-./workspace}
+        outputs    = \$workspace/outputs
+
+  (Note: there is no SWE_OUTPUT_DIR; outputs live under the workspace above.)
+
+WORKFLOW
+  1. ./run.sh --index          (one-time: cache the dataset)
+  2. ./run.sh --build          (one-time: build Docker images)
+  3. ./run.sh --run <agent> <id>  or  --run-all <agent>   (collect patches)
+  4. ./run.sh --eval <agent>   (run the test harness on collected patches)
+  5. ./run.sh --status         (inspect results)
+
+PREREQUISITES
+  - Docker must be installed and running (used for --build, --run, --run-all,
+    --eval, --interactive, and the dataset fetch behind --index/--list).
+  - A HuggingFace dataset fetch happens on first --index / --list.
+
+EXAMPLES
+  $(basename "$0") --index
+  $(basename "$0") --list "django"
+  $(basename "$0") --build
+  $(basename "$0") --run pi django__django-11039
+  $(basename "$0") --run-all pi
+  $(basename "$0") --eval pi
+  $(basename "$0") --status
+  $(basename "$0") --interactive codex
 EOF
 }
 
@@ -393,10 +445,9 @@ do_interactive() {
     fi
 
     echo "Starting interactive container for '${agent}'..."
-    local DOCKER_RUN="docker run"
+    local DOCKER_RUN="docker run --rm -i"
     [ -t 0 ] && DOCKER_RUN="$DOCKER_RUN -t"  # allocate TTY only if stdin is a terminal
-    $DOCKER_RUN -i \
-        --name "pi_swe_evaluator" \
+    $DOCKER_RUN \
         --memory 8g \
         --memory-swap 8g \
         --pids-limit 500 \
