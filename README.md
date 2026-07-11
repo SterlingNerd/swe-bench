@@ -110,6 +110,7 @@ Containers are intentionally locked down:
 - **No new privileges** — `no-new-privileges:true`
 - **Memory limit** — 8 GB RAM + swap, 500 PID limit
 - **Unprivileged user** — runs as `agent` user, not root
+- **tmpfs mounts** — `/tmp` and workspace are tmpfs with `noexec,nosuid`
 
 ## Configuration
 

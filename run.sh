@@ -25,7 +25,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 AGENTS_DIR="${REPO_ROOT}/agents"
-OUTPUT_DIR="${SWE_OUTPUT_DIR:-${WORKSPACE_DIR}/outputs}"
+OUTPUT_DIR="${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}/outputs"
 WORKSPACE_DIR="${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}"
 CACHE_FILE="/tmp/swe_verified_cache.json"
 HF_DATASET="princeton-nlp/SWE-bench_Verified"

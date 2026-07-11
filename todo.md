@@ -111,3 +111,37 @@ Fix: skip `base` in the agent loop (or build it only in the loop).
 
 ### [x] 13. ~~Stale README reference to deleted `docker-compose.yml` (`README.md:10`)~~
 Git history removed the compose file; README still lists it. Update docs.
+
+## Remaining bugs
+
+### [x] 14. ~~`do_status` reads from wrong directory — never finds results (`entrypoint.sh:22` vs `run.sh:do_status`)~~
+Entrypoint writes to `${WORKSPACE}/outputs/<id>` which maps to `$SWE_WORKSPACE_DIR/outputs/<id>` on the host.
+But `do_status` reads from `${SWE_OUTPUT_DIR:-$REPO_ROOT/outputs}` — a completely different path.
+These only match if you explicitly set `SWE_OUTPUT_DIR=./workspace/outputs`.
+
+Fix: change `OUTPUT_DIR` default in `run.sh` to `${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}/outputs`,
+or change the entrypoint to write to `$REPO_ROOT/outputs`. ✅ Fixed — `OUTPUT_DIR` now always derives from `WORKSPACE_DIR`.
+
+### 15. `--run` status is always `"patch_collected"` — never shows resolved/failed (`entrypoint.sh:70-80`)
+The entrypoint writes `{"status": "patch_collected", ...}` to `result.json`. It never runs the swebench
+harness, so `--status` can only show "no result" for all instances until `--eval` runs successfully.
+This is by design (separation of concerns), but misleading: `result.json` implies a final verdict
+when it's really just an intermediate marker.
+
+Fix: rename the status value to `"patch_collected"` in the README, or add a note that `--status`
+only shows meaningful results after `--eval` completes. Alternatively, have `do_status` check
+whether `--eval` has been run and show eval results instead of `result.json`.
+
+### 16. `repo_url` gets `.git` appended in entrypoint — fragile (`entrypoint.sh:40`)
+```bash
+git clone "${REPO_URL}.git" "$REPO_DIR"
+```
+The HuggingFace dataset `repo` field is `django/django` (no `.git`), so this works today.
+But if any future dataset variant includes `.git` in the URL, it becomes
+`https://github.com/django/django.git.git` and clone fails.
+
+Fix: strip trailing `.git` before appending:
+```bash
+REPO_URL_CLEAN=$(echo "${REPO_URL}" | sed 's/\.git$//')
+git clone "${REPO_URL_CLEAN}.git" "$REPO_DIR"
+```
