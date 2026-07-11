@@ -8,18 +8,20 @@ A locked-down Docker sandbox for running coding agents against **SWE-bench Verif
 swe-bench/
 ├── README.md                      # This file
 ├── docker-compose.yml             # Container orchestration (interactive mode)
+├── run.sh                         # Unified orchestrator (--index, --list, --build, --run)
+│
+├── agents/base/                   # Shared base image (not agent-specific)
+│   └── Dockerfile.base            # Python 3.10 + swebench + pyenv + system deps
 │
 ├── agents/pi/                     # Pi agent container definition
 │   ├── .pi/                       # Pi config (settings, models, auth, npm)
 │   │   ├── settings.json          # Provider, model, retry settings
 │   │   ├── models.json            # Local llama.cpp provider definition
 │   │   └── npm/                   # Pi packages
-│   ├── Dockerfile.base            # Base: Python 3.10 + swebench + pyenv + system deps
 │   ├── Dockerfile.pi              # Pi agent on top of base (Node.js + pi CLI)
 │   └── entrypoint.sh              # Generic clone → run agent → extract patch → eval
 │
-└── orchestration/                 # Host-side scripts
-    └── run.sh                     # Unified: --index, --list, --build, --run, --run-all
+└── auth.json                      # API keys (mounted into containers at runtime)
 ```
 
 ## Quick Start
@@ -27,7 +29,7 @@ swe-bench/
 ### 1. Index the dataset (first time only)
 
 ```bash
-./orchestration/run.sh --index
+./run.sh --index
 ```
 
 Fetches and caches all 500 SWE-bench Verified instances from HuggingFace.
@@ -35,7 +37,7 @@ Fetches and caches all 500 SWE-bench Verified instances from HuggingFace.
 ### 2. Build images
 
 ```bash
-./orchestration/run.sh --build
+./run.sh --build
 ```
 
 Builds `swe-base` (shared infrastructure) + `swe-pi` (Pi agent on top).
@@ -43,7 +45,7 @@ Builds `swe-base` (shared infrastructure) + `swe-pi` (Pi agent on top).
 ### 3. Run an agent against a specific instance
 
 ```bash
-./orchestration/run.sh --run pi django__django-11039
+./run.sh --run pi django__django-11039
 ```
 
 Clones the repo, runs Pi headlessly, extracts the patch, evaluates it. Results persist in `outputs/django__django-11039/`.
@@ -51,7 +53,7 @@ Clones the repo, runs Pi headlessly, extracts the patch, evaluates it. Results p
 ### 4. Run against all instances
 
 ```bash
-./orchestration/run.sh --run-all pi
+./run.sh --run-all pi
 ```
 
 Iterates through all 500 verified instances sequentially.
@@ -59,7 +61,7 @@ Iterates through all 500 verified instances sequentially.
 ### 5. Check status
 
 ```bash
-./orchestration/run.sh --status
+./run.sh --status
 ```
 
 Shows color-coded completion overview.

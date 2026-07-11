@@ -133,7 +133,7 @@ do_build() {
     # Build base image
     if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
         echo "Building ${BASE_IMAGE}..."
-        docker build -f "${AGENTS_DIR}/pi/Dockerfile.base" -t "$BASE_IMAGE" "${REPO_ROOT}"
+        docker build -f "${AGENTS_DIR}/base/Dockerfile.base" -t "$BASE_IMAGE" "${REPO_ROOT}"
     else
         echo "${BASE_IMAGE} already exists."
     fi
