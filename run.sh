@@ -64,16 +64,16 @@ fetch_dataset() {
 
     if [ "$needs_fetch" -eq 1 ]; then
         echo "Fetching dataset from HuggingFace (may take a moment)..."
-        docker run --rm -e HF_DATASET="${HF_DATASET}" python:3.10-slim bash -c "
+        docker run --rm -e HF_DATASET="${HF_DATASET}" python:3.10-slim bash -c '
 pip install -q datasets >/dev/null 2>&1
-python3 -c \"
+python3 << "PYEOF"
 from datasets import load_dataset
 import json, os
-ds = load_dataset(os.environ['HF_DATASET'], split='test')
+ds = load_dataset(os.environ["HF_DATASET"], split="test")
 data = [dict(i) for i in ds]
 print(json.dumps(data))
-\"
-" > "$CACHE_FILE" 2>/dev/null
+PYEOF
+' > "$CACHE_FILE" 2>/dev/null
     fi
     cat "$CACHE_FILE"
 }
