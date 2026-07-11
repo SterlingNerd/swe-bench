@@ -248,14 +248,14 @@ do_run_all() {
     fi
 
     # Get all instance IDs
-    fetch_dataset | python3 -c "
+    while read -r instance_id; do
+        do_run "$agent" "$instance_id"
+    done < <(fetch_dataset | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 for inst in data:
     print(inst['instance_id'])
-" | while read -r instance_id; do
-        do_run "$agent" "$instance_id"
-    done
+")
 }
 
 # ==============================================================================
