@@ -329,14 +329,54 @@ print(f'Collected {len(results)} patches')
 
     # Run evaluation directly on the host (swebench harness creates its own
     # test containers as needed — no need to wrap in another container).
+    local results_dir="${eval_dir}/results"
     python3 -m swebench.harness.run_evaluation \
         --dataset_name princeton-nlp/SWE-bench_Verified \
         --predictions_path "$tmp_preds" \
         --max_workers 1 \
         --namespace '' \
+        --output_dir "$results_dir" \
         2>&1 | tee "${eval_dir}/eval.log"
 
     rm -f "$tmp_preds"
+
+    # Update result.json for each instance with actual eval status
+    if [ -d "$results_dir" ]; then
+        python3 -c "
+import json, os, glob
+
+results_dir = '${results_dir}'
+output_dir  = '${eval_dir}'
+
+# swebench writes per-instance results as JSONL in results/<dataset>/test_results.jsonl
+for test_file in glob.glob(os.path.join(results_dir, '*', 'test_results.jsonl')):
+    with open(test_file) as f:
+        for line in f:
+            entry = json.loads(line)
+            iid   = entry.get('instance_id')
+            if not iid:
+                continue
+            result_path = os.path.join(output_dir, iid, 'result.json')
+            if not os.path.exists(result_path):
+                continue
+            # Determine status from the test results
+            logs_to_analyze = entry.get('logs_to_analyze', [])
+            test_results    = entry.get('test_results', {})
+            resolved        = test_results.get('resolved', False)
+            if resolved:
+                status = 'resolved'
+            elif logs_to_analyze:
+                status = 'failed'
+            else:
+                status = 'failed'  # no logs means it didn't pass
+            with open(result_path) as f:
+                meta = json.load(f)
+            meta['status'] = status
+            with open(result_path, 'w') as f:
+                json.dump(meta, f, indent=2)
+            print(f'  Updated {iid}: {status}')
+" 2>/dev/null || echo "  (Could not parse eval results — check eval.log)"
+    fi
 }
 
 # ==============================================================================

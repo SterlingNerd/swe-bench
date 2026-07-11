@@ -122,15 +122,15 @@ These only match if you explicitly set `SWE_OUTPUT_DIR=./workspace/outputs`.
 Fix: change `OUTPUT_DIR` default in `run.sh` to `${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}/outputs`,
 or change the entrypoint to write to `$REPO_ROOT/outputs`. ✅ Fixed — `OUTPUT_DIR` now always derives from `WORKSPACE_DIR`.
 
-### 15. `--run` status is always `"patch_collected"` — never shows resolved/failed (`entrypoint.sh:70-80`)
+### [x] 15. ~~`--run` status is always `"patch_collected"` — never shows resolved/failed (`entrypoint.sh:70-80`, `run.sh:do_eval`)~~
 The entrypoint writes `{"status": "patch_collected", ...}` to `result.json`. It never runs the swebench
 harness, so `--status` can only show "no result" for all instances until `--eval` runs successfully.
 This is by design (separation of concerns), but misleading: `result.json` implies a final verdict
 when it's really just an intermediate marker.
 
-Fix: rename the status value to `"patch_collected"` in the README, or add a note that `--status`
-only shows meaningful results after `--eval` completes. Alternatively, have `do_status` check
-whether `--eval` has been run and show eval results instead of `result.json`.
+Fix: have `do_eval` parse the swebench harness output (`test_results.jsonl`) after evaluation and
+update each instance's `result.json` with the actual status (`resolved` / `failed`). ✅ Fixed —
+`do_eval` now writes results to a dedicated `results/` directory and updates `result.json` per instance.
 
 ### 16. `repo_url` gets `.git` appended in entrypoint — fragile (`entrypoint.sh:40`)
 ```bash
