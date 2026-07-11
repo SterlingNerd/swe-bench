@@ -107,7 +107,6 @@ outputs/<instance_id>/
 ## Security Hardening
 
 Containers are intentionally locked down:
-- **Read-only root filesystem** — writable tmpfs only for `/tmp` and workspace
 - **Dropped all capabilities** — only `NET_RAW` added back
 - **No new privileges** — `no-new-privileges:true`
 - **Memory limit** — 8 GB RAM + swap, 500 PID limit

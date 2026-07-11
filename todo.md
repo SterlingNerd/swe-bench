@@ -59,7 +59,7 @@ a path that `do_status` already points at. Also fix the README path.
 
 ## Security / hardening
 
-### [ ] 5. README overstates hardening — no read-only root fs (`run.sh` docker runs, `README.md:110`)
+### [x] 5. ~~README overstates hardening — no read-only root fs (`run.sh` docker runs, `README.md:110`)~~
 README claims "Read-only root filesystem" but there is no `--read-only` flag
 anywhere in `run.sh`. Container can write to root fs.
 
