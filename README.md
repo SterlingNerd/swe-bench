@@ -46,11 +46,13 @@ one; omit it to build all agent images. Existing images are skipped.
 
 To force a from-scratch build (e.g. to pull the latest pi CLI or refresh
 cached layers), use `--rebuild` instead — it always rebuilds with `--no-cache`
-and skips nothing:
+and skips nothing. A SCOPE argument controls what is rebuilt:
 
 ```bash
-./run.sh --rebuild        # rebuild base + all agent images from scratch
-./run.sh --rebuild pi     # rebuild base, then only the 'pi' agent image
+./run.sh --rebuild          # rebuild base + all agent images from scratch
+./run.sh --rebuild all      # same as above (default)
+./run.sh --rebuild base     # rebuild only the shared base image
+./run.sh --rebuild pi       # rebuild only the 'pi' agent image (base NOT rebuilt)
 ```
 
 ### 3. Run an agent against a specific instance

@@ -7,7 +7,7 @@
 #   ./run.sh --index             Fetch and cache problem listings from HuggingFace
 #   ./run.sh --list [filter]     List problems (optional grep filter)
 #   ./run.sh --build [agent]     Build base + all (or one) agent Docker image(s)
-#   ./run.sh --rebuild [agent]  Rebuild from scratch (--no-cache, pulls latest)
+#   ./run.sh --rebuild [scope] Rebuild from scratch (--no-cache): all|base|<agent>
 #   ./run.sh --run <agent> <id>  Run an agent against a specific instance
 #   ./run.sh --run-all <agent>   Run agent against all 500 instances
 #   ./run.sh --eval <agent>      Evaluate collected patches for an agent
@@ -123,10 +123,13 @@ COMMANDS
       otherwise all agent images are built. Existing images are skipped.
       Run this before --run, --run-all, --eval, or --interactive.
 
-  --rebuild [AGENT]
-      Same as --build but always rebuilds from scratch (--no-cache), so the
-      latest pi CLI / base image deps are freshly pulled. Use this to upgrade
-      pi or refresh cached layers. Skips nothing.
+  --rebuild [SCOPE]
+      Always rebuild from scratch (--no-cache) so the latest pi CLI / base
+      image deps are freshly pulled. SCOPE controls what is rebuilt:
+        (none)/all  base image + all agent images
+        base        only the shared base image
+        <agent>     only that agent image (base is NOT rebuilt)
+      Use this to upgrade pi or refresh cached layers. Skips nothing.
 
   --run <AGENT> <INSTANCE_ID>
       Run an agent against a single instance. AGENT is a folder name under
@@ -179,7 +182,9 @@ EXAMPLES
   $(basename "$0") --index
   $(basename "$0") --list "django"
   $(basename "$0") --build
-  $(basename "$0") --rebuild pi   # force fresh build (latest pi CLI)
+  $(basename "$0") --rebuild           # force fresh build of base + all agents (latest pi CLI)
+  $(basename "$0") --rebuild base      # rebuild only the base image
+  $(basename "$0") --rebuild pi        # rebuild only the 'pi' agent image
   $(basename "$0") --run pi django__django-11039
   $(basename "$0") --run-all pi
   $(basename "$0") --eval pi
@@ -273,12 +278,39 @@ do_build() {
 }
 
 # ==============================================================================
-# REBUILD — like --build but always from scratch (--no-cache)
+# REBUILD — always from scratch (--no-cache), scope-controlled by arg:
+#   --rebuild           -> base + all agent images (default: 'all')
+#   --rebuild all       -> base + all agent images
+#   --rebuild base      -> only the base image
+#   --rebuild <agent>   -> only that agent image (base NOT rebuilt)
 # ==============================================================================
+build_agent_image() {
+    local agent_dir="$1"
+    local agent_name image_name dockerfile df
+    agent_name=$(basename "$agent_dir")
+    [ "$agent_name" = "base" ] && return 0
+    image_name="swe-${agent_name}"
+    dockerfile="${agent_dir}/Dockerfile.${agent_name}"
+
+    # Try Dockerfile.agent_name first, fall back to Dockerfile.pi
+    if [ -f "$dockerfile" ]; then
+        df="$dockerfile"
+    elif [ -f "${agent_dir}/Dockerfile.pi" ]; then
+        df="${agent_dir}/Dockerfile.pi"
+    else
+        echo "WARNING: No Dockerfile found for agent '${agent_name}', skipping."
+        return 0
+    fi
+
+    echo "Building ${image_name}..."
+    docker build --no-cache -f "$df" -t "$image_name" "${agent_dir}"
+}
+
 do_rebuild() {
-    local only_agent="${1:-}"
-    if [ -n "$only_agent" ] && [ ! -d "${AGENTS_DIR}/${only_agent}" ]; then
-        echo "ERROR: Agent '${only_agent}' not found. Available agents:"
+    local scope="${1:-all}"
+    if [ "$scope" != "all" ] && [ "$scope" != "base" ] && [ ! -d "${AGENTS_DIR}/${scope}" ]; then
+        echo "ERROR: Unknown rebuild target '${scope}'. Use 'all', 'base', or an agent name."
+        echo "Available agents:"
         for d in "${AGENTS_DIR}"/*/; do
             [ -d "$d" ] && [ "$(basename "$d")" != "base" ] && echo "  $(basename "$d")"
         done
@@ -287,33 +319,22 @@ do_rebuild() {
 
     echo "=== Rebuilding Docker Images (--no-cache) ==="
 
-    # Rebuild base image first
-    echo "Building ${BASE_IMAGE}..."
-    docker build --no-cache -f "${AGENTS_DIR}/base/Dockerfile.base" -t "$BASE_IMAGE" "${AGENTS_DIR}/base/"
-
-    # Rebuild agent images (skip 'base' — built explicitly above)
-    for agent_dir in "${AGENTS_DIR}"/*/; do
-        [ -d "$agent_dir" ] || continue
-        agent_name=$(basename "$agent_dir")
-        [ "$agent_name" = "base" ] && continue
-        [ -n "$only_agent" ] && [ "$agent_name" != "$only_agent" ] && continue
-        image_name="swe-${agent_name}"
-        dockerfile="${agent_dir}/Dockerfile.${agent_name}"
-
-        # Try Dockerfile.agent_name first, fall back to Dockerfile.pi
-        if [ -f "$dockerfile" ]; then
-            df="$dockerfile"
-        elif [ -f "${agent_dir}/Dockerfile.pi" ]; then
-            df="${agent_dir}/Dockerfile.pi"
-        else
-            echo "WARNING: No Dockerfile found for agent '${agent_name}', skipping."
-            continue
-        fi
-
-        # Always rebuild (--no-cache) so latest pi CLI / deps are pulled
-        echo "Building ${image_name}..."
-        docker build --no-cache -f "$df" -t "$image_name" "${agent_dir}"
-    done
+    if [ "$scope" = "base" ]; then
+        # Only the base image
+        echo "Building ${BASE_IMAGE}..."
+        docker build --no-cache -f "${AGENTS_DIR}/base/Dockerfile.base" -t "$BASE_IMAGE" "${AGENTS_DIR}/base/"
+    elif [ "$scope" = "all" ]; then
+        # Base image first, then every agent image
+        echo "Building ${BASE_IMAGE}..."
+        docker build --no-cache -f "${AGENTS_DIR}/base/Dockerfile.base" -t "$BASE_IMAGE" "${AGENTS_DIR}/base/"
+        for agent_dir in "${AGENTS_DIR}"/*/; do
+            [ -d "$agent_dir" ] || continue
+            build_agent_image "$agent_dir"
+        done
+    else
+        # A specific agent only — do NOT rebuild base
+        build_agent_image "${AGENTS_DIR}/${scope}"
+    fi
 
     echo ""
     echo "=== Built Images ==="
