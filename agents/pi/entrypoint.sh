@@ -43,7 +43,8 @@ REPO_DIR="${REPOS_DIR}/${REPO_NAME}"
 if [ ! -d "$REPO_DIR" ]; then
     echo "  Cloning ${REPO_NAME} @ ${BASE_COMMIT:0:8}..."
     mkdir -p "${REPOS_DIR}"
-    git clone "${REPO_URL}.git" "$REPO_DIR" 2>&1 | tail -1
+    REPO_URL_CLEAN=$(echo "${REPO_URL}" | sed 's/\.git$//')
+    git clone "${REPO_URL_CLEAN}.git" "$REPO_DIR" 2>&1 | tail -1
 fi
 
 cd "$REPO_DIR" && git checkout "$BASE_COMMIT" >/dev/null 2>&1

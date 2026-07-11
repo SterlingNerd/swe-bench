@@ -132,7 +132,7 @@ Fix: have `do_eval` parse the swebench harness output (`test_results.jsonl`) aft
 update each instance's `result.json` with the actual status (`resolved` / `failed`). ✅ Fixed —
 `do_eval` now writes results to a dedicated `results/` directory and updates `result.json` per instance.
 
-### 16. `repo_url` gets `.git` appended in entrypoint — fragile (`entrypoint.sh:40`)
+### [x] 16. ~~`repo_url` gets `.git` appended in entrypoint — fragile (`entrypoint.sh:40`)~~
 ```bash
 git clone "${REPO_URL}.git" "$REPO_DIR"
 ```
@@ -140,8 +140,5 @@ The HuggingFace dataset `repo` field is `django/django` (no `.git`), so this wor
 But if any future dataset variant includes `.git` in the URL, it becomes
 `https://github.com/django/django.git.git` and clone fails.
 
-Fix: strip trailing `.git` before appending:
-```bash
-REPO_URL_CLEAN=$(echo "${REPO_URL}" | sed 's/\.git$//')
-git clone "${REPO_URL_CLEAN}.git" "$REPO_DIR"
-```
+Fix: strip trailing `.git` before appending.
+✅ Fixed — `REPO_URL_CLEAN` now strips trailing `.git` before appending.
