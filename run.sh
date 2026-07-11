@@ -20,6 +20,14 @@
 set -euo pipefail
 
 # ==============================================================================
+# CLEANUP — remove any containers this script created on exit
+# ==============================================================================
+cleanup() {
+    docker rm -f "$(docker ps -aq --filter 'name=swe_' 2>/dev/null)" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# ==============================================================================
 # CONFIGURATION
 # ==============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
