@@ -41,7 +41,7 @@ fetch_dataset() {
     if [ ! -f "$CACHE_FILE" ]; then
         echo "Fetching dataset from HuggingFace (first time, may take a moment)..."
         docker run --rm python:3.10-slim bash -c "
-pip install datasets -q 2>&1 | tail -1
+pip install -q datasets >/dev/null 2>&1
 python3 -c \"
 from datasets import load_dataset
 import json
