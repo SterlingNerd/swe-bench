@@ -68,7 +68,7 @@ for inst in data:
     if inst['instance_id'] == os.environ.get('INSTANCE_ID', ''):
         print(json.dumps(inst))
         sys.exit(0)
-print('ERROR: Instance not found: ${instance_id}', file=sys.stderr)
+print(f\"ERROR: Instance not found: {os.environ['INSTANCE_ID']}\", file=sys.stderr)
 sys.exit(1)
 "
 }
@@ -309,7 +309,7 @@ do_eval() {
 
     # Build predictions.json from all collected patches
     local tmp_preds=$(mktemp)
-    EVAL_DIR="${eval_dir}" python3 -c "
+    EVAL_DIR="${eval_dir}" AGENT_NAME="${agent}" TMP_PREDS="${tmp_preds}" python3 -c "
 import sys, json, os
 results = []
 for instance_id in sys.argv[1:]:
@@ -320,10 +320,10 @@ for instance_id in sys.argv[1:]:
         patch = f.read()
     results.append({
         'instance_id': instance_id,
-        'model_name_or_path': '${agent}',
+        'model_name_or_path': os.environ['AGENT_NAME'],
         'model_patch': patch
     })
-with open('${tmp_preds}', 'w') as f:
+with open(os.environ['TMP_PREDS'], 'w') as f:
     json.dump(results, f)
 print(f'Collected {len(results)} patches')
 " "${instance_ids[@]}"
@@ -343,11 +343,11 @@ print(f'Collected {len(results)} patches')
 
     # Update result.json for each instance with actual eval status
     if [ -d "$results_dir" ]; then
-        python3 -c "
+        RESULTS_DIR="${results_dir}" OUTPUT_DIR="${eval_dir}" python3 -c "
 import json, os, glob
 
-results_dir = '${results_dir}'
-output_dir  = '${eval_dir}'
+results_dir = os.environ['RESULTS_DIR']
+output_dir  = os.environ['OUTPUT_DIR']
 
 # swebench writes per-instance results as JSONL in results/<dataset>/test_results.jsonl
 for test_file in glob.glob(os.path.join(results_dir, '*', 'test_results.jsonl')):
