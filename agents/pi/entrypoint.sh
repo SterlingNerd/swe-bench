@@ -70,45 +70,11 @@ PATCH_SIZE=$(wc -c < "${OUTPUT_DIR}/patch.diff" 2>/dev/null || echo 0)
 if [ "$PATCH_SIZE" -eq 0 ]; then
     echo "  WARNING: No patch generated (0 bytes)"
     echo '{"status": "no_patch", "patch_bytes": 0}' > "${OUTPUT_DIR}/result.json"
-    exit 0
+else
+    echo "  Patch collected (${PATCH_SIZE} bytes)."
+    echo "  Run './run.sh --eval <agent>' to evaluate with swebench harness."
+    END_TIME=$(date +%s)
+    ELAPSED=$((END_TIME - START_TIME))
+    echo "{\"status\": \"patch_collected\", \"patch_bytes\": ${PATCH_SIZE}, \"elapsed_seconds\": ${ELAPSED}}" > "${OUTPUT_DIR}/result.json"
 fi
-
-# Evaluate using swebench harness
-echo "  Evaluating patch (${PATCH_SIZE} bytes)..."
-
-python3 -c "
-import json
-with open('${OUTPUT_DIR}/patch.diff', 'r') as f:
-    patch = f.read()
-pred = [{
-    'instance_id': '${INSTANCE_ID}',
-    'model_name_or_path': 'agent',
-    'model_patch': patch
-}]
-with open('${OUTPUT_DIR}/eval/predictions.json', 'w') as f:
-    json.dump(pred, f)
-"
-
-python3 -m swebench.harness.run_evaluation \
-    --dataset_name princeton-nlp/SWE-bench_Verified \
-    --predictions_path "${OUTPUT_DIR}/eval/predictions.json" \
-    --max_workers 1 \
-    --namespace "" \
-    2>&1 | tee "${OUTPUT_DIR}/eval/harness.log" || true
-
-# Parse result and save
-STATUS="unknown"
-if grep -q '"resolved": true' "${OUTPUT_DIR}/eval/harness.log" 2>/dev/null; then
-    STATUS="resolved"
-elif grep -q '"no_test_changes"' "${OUTPUT_DIR}/eval/harness.log" 2>/dev/null; then
-    STATUS="no_test_changes"
-elif grep -q '"failed"' "${OUTPUT_DIR}/eval/harness.log" 2>/dev/null; then
-    STATUS="failed"
-fi
-
-END_TIME=$(date +%s)
-ELAPSED=$((END_TIME - START_TIME))
-
-echo "{\"status\": \"${STATUS}\", \"patch_bytes\": ${PATCH_SIZE}, \"elapsed_seconds\": ${ELAPSED}}" > "${OUTPUT_DIR}/result.json"
-echo "  Result: ${STATUS} (${ELAPSED}s)"
 echo "  Output: ${OUTPUT_DIR}/"

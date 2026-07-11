@@ -1,15 +1,20 @@
 #!/bin/bash
 # ==============================================================================
-# SWE-bench Orchestrator — unified build, index, list, and run
+# SWE-bench Orchestrator — unified build, index, list, run, and eval
 #
 # Usage:
 #   ./run.sh --help              Show this help
 #   ./run.sh --index             Fetch and cache problem listings from HuggingFace
 #   ./run.sh --list [filter]     List problems (optional grep filter)
 #   ./run.sh --build             Build all Docker images
-#   ./run.sh --interactive       Start interactive container for manual debugging
 #   ./run.sh --run <agent> <id>  Run an agent against a specific instance
 #   ./run.sh --run-all <agent>   Run agent against all 500 instances
+#   ./run.sh --eval <agent>      Evaluate collected patches for an agent
+#   ./run.sh --interactive       Start interactive container for manual debugging
+#
+# Workflow:
+#   1. --run / --run-all  → collects patches to outputs/<id>/
+#   2. --eval              → runs swebench harness with Docker access on collected patches
 # ==============================================================================
 
 set -euo pipefail
@@ -82,7 +87,11 @@ Commands:
   --run <agent> <id>     Run an agent against a specific instance
                          agent: pi, codex, claude, etc. (folder name under agents/)
                          id: instance_id (e.g., django__django-11039)
+                         Collects patch to outputs/<id>/ — no Docker needed.
   --run-all <agent>      Run agent against all 500 verified instances
+                         Collects patches to outputs/<id>/ — no Docker needed.
+  --eval <agent>         Evaluate collected patches for an agent
+                         Runs swebench harness with Docker access.
 
 Environment:
   SWE_OUTPUT_DIR         Output directory (default: ./outputs)
@@ -95,6 +104,7 @@ Examples:
   ./run.sh --interactive
   ./run.sh --run pi django__django-11039
   ./run.sh --run-all pi
+  ./run.sh --eval pi
 EOF
 }
 
@@ -201,7 +211,7 @@ do_run() {
     base_commit=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['base_commit'])")
     problem_statement=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['problem_statement'])")
 
-    # Run the agent container
+    # Run the agent container (patch collection only — no Docker needed)
     echo "=============================================================================="
     echo "Running: ${agent} against ${instance_id}"
     echo "=============================================================================="
@@ -216,7 +226,6 @@ do_run() {
         --cap-add NET_RAW \
         --security-opt no-new-privileges:true \
         --add-host host.docker.internal:host-gateway \
-        -v /var/run/docker.sock:/var/run/docker.sock \
         -v "${WORKSPACE_DIR}:/home/agent/workspace:rw" \
         -v "${REPO_ROOT}/agents/${agent}/.pi/auth.json:/home/agent/.pi/auth.json:ro" \
         "$image_name" \
@@ -247,6 +256,101 @@ for inst in data:
 " | while read -r instance_id; do
         do_run "$agent" "$instance_id"
     done
+}
+
+# ==============================================================================
+# EVAL — evaluate collected patches using swebench harness
+# ==============================================================================
+do_eval() {
+    local agent="${1:?Usage: $0 --eval <agent>}"
+    local image_name="swe-${agent}"
+
+    # Validate agent exists
+    if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
+        echo "ERROR: Agent '${agent}' not found. Available agents:"
+        for d in "${AGENTS_DIR}"/*/; do
+            [ -d "$d" ] && echo "  $(basename "$d")"
+        done
+        exit 1
+    fi
+
+    # Validate image exists
+    if ! docker image inspect "$image_name" >/dev/null 2>&1; then
+        echo "ERROR: Image '${image_name}' not found. Run './run.sh --build' first."
+        exit 1
+    fi
+
+    # Find all collected output directories for this agent
+    local eval_dir="${OUTPUT_DIR}"
+    if [ ! -d "$eval_dir" ]; then
+        echo "No outputs found. Run instances first (--run or --run-all)."
+        return
+    fi
+
+    local instance_ids=()
+    for instance_dir in "${eval_dir}"/*/; do
+        [ -d "$instance_dir" ] || continue
+        # Only evaluate directories that have a patch (not just meta)
+        if [ -f "${instance_dir}patch.diff" ]; then
+            instance_ids+=("$(basename "$instance_dir")")
+        fi
+    done
+
+    if [ ${#instance_ids[@]} -eq 0 ]; then
+        echo "No patches found to evaluate. Run instances first."
+        return
+    fi
+
+    echo "=============================================================================="
+    echo "Evaluating ${#instance_ids[@]} patch(es) for '${agent}'"
+    echo "=============================================================================="
+
+    # Build predictions.json from all collected patches
+    local tmp_preds=$(mktemp)
+    python3 -c "
+import sys, json, os
+results = []
+for instance_id in sys.argv[1:]:
+    patch_path = os.path.join('${eval_dir}', instance_id, 'patch.diff')
+    if not os.path.exists(patch_path):
+        continue
+    with open(patch_path) as f:
+        patch = f.read()
+    results.append({
+        'instance_id': instance_id,
+        'model_name_or_path': '${agent}',
+        'model_patch': patch
+    })
+with open('${tmp_preds}', 'w') as f:
+    json.dump(results, f)
+print(f'Collected {len(results)} patches')
+" "${instance_ids[@]}"
+
+    # Run evaluation with Docker access
+    docker run --rm \
+        --name "swe_eval_${agent}" \
+        --memory 8g \
+        --memory-swap 8g \
+        --pids-limit 500 \
+        --tmpfs /tmp:rw,noexec,nosuid,size=2g \
+        --cap-drop ALL \
+        --cap-add NET_RAW \
+        --security-opt no-new-privileges:true \
+        --add-host host.docker.internal:host-gateway \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v "${eval_dir}:/home/agent/outputs:ro" \
+        -v "${tmp_preds}:/tmp/predictions.json:ro" \
+        "$image_name" \
+        bash -c "
+python3 -m swebench.harness.run_evaluation \\
+    --dataset_name princeton-nlp/SWE-bench_Verified \\
+    --predictions_path /tmp/predictions.json \\
+    --max_workers 1 \\
+    --namespace '' \\
+    2>&1 | tee /home/agent/eval.log
+"
+
+    rm -f "$tmp_preds"
 }
 
 # ==============================================================================
@@ -344,6 +448,9 @@ case "$1" in
         ;;
     --run-all)
         do_run_all "${2:-}"
+        ;;
+    --eval)
+        do_eval "${2:-}"
         ;;
     --status)
         do_status

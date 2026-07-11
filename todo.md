@@ -38,17 +38,15 @@ with open('${OUTPUT_DIR}/eval/predictions.json', 'w') as f:
     json.dump(pred, f)
 ```
 
-### [x] 3. ~~Evaluation can't run in `--run` (no Docker daemon) (`run.sh:209-225`)~~
+### [x] 3. ~~Evaluation can't run in `--run` (no Docker daemon) (`run.sh:209-225`, `entrypoint.sh:81-110`)~~
 SWE-bench harness runs tests inside a Docker container, so it needs a
 Docker daemon. `--interactive` mounts the host socket, but `--run` does not
 and no in-container `dockerd` is started. `run_evaluation` fails, `|| true`
 swallows it, `STATUS` stays `"unknown"`.
 
-Fix options:
-- Mount `/var/run/docker.sock` (host Docker) into the `--run` container, or
-- Run a `dockerd` (DinD, needs `--privileged`) inside the container, or
-- Document clearly that `--run` only collects the patch and evaluation must
-  be done separately.
+Fix: separated work from eval. `--run`/`--run-all` now only collect patches
+(no Docker needed inside the agent container). A new `--eval <agent>` command
+runs a harness container with Docker access to evaluate all collected patches.
 
 ### [ ] 4. Output location mismatch → `do_status` never finds results
 (`entrypoint.sh:22` vs `run.sh` `do_status` / `README.md:95`)
