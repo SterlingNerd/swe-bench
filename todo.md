@@ -76,7 +76,7 @@ Docker access). Also changed `do_eval` to run directly on the host instead of
 wrapping it in a container — the swebench harness creates its own test
 containers as needed.
 
-### [ ] 7. Committed credential-shaped `auth.json` is dead/unused (`auth.json`)
+### [x] 7. ~~Committed credential-shaped `auth.json` is dead/unused (`auth.json`)~~
 Root `auth.json` has `"key": "asdfasdf"`, is committed, but `run.sh` mounts
 `agents/pi/.pi/auth.json` instead. Fake key (no leak) but bad hygiene and
 confusing vs the documented layout.
@@ -86,7 +86,7 @@ used) and reconcile with the README's `auth.json` description.
 
 ## Minor / robustness
 
-### [ ] 8. `session-id` literal quotes → `session.jsonl` never saved (`entrypoint.sh:23,60`)
+### [x] 8. ~~`session-id` literal quotes → `session.jsonl` never saved (`entrypoint.sh:23,60`)~~
 `AGENT_CMD="... --session-id '${INSTANCE_ID}'"` embeds literal single quotes
 that become part of the argument; the later `cp /tmp/pi-sessions/${INSTANCE_ID}/session.jsonl` looks for the unquoted path and fails (`|| true`).
 Fix: drop the single quotes: `--session-id ${INSTANCE_ID}`.

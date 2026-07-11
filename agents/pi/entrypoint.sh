@@ -20,7 +20,7 @@ PROBLEM_STATEMENT="${4:?Missing problem_statement}"
 WORKSPACE="/home/agent/workspace"
 REPOS_DIR="${WORKSPACE}/repos"
 OUTPUT_DIR="${WORKSPACE}/outputs/${INSTANCE_ID}"
-AGENT_CMD="pi -p --session-dir /tmp/pi-sessions --session-id '${INSTANCE_ID}'"
+AGENT_CMD="pi -p --session-dir /tmp/pi-sessions --session-id ${INSTANCE_ID}"
 
 echo "=============================================================================="
 echo "SWE-bench Agent: ${INSTANCE_ID}"
