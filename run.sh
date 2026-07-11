@@ -216,6 +216,7 @@ do_run() {
         --cap-add NET_RAW \
         --security-opt no-new-privileges:true \
         --add-host host.docker.internal:host-gateway \
+        -v /var/run/docker.sock:/var/run/docker.sock \
         -v "${WORKSPACE_DIR}:/home/agent/workspace:rw" \
         -v "${REPO_ROOT}/agents/${agent}/.pi/auth.json:/home/agent/.pi/auth.json:ro" \
         "$image_name" \

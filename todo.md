@@ -38,7 +38,7 @@ with open('${OUTPUT_DIR}/eval/predictions.json', 'w') as f:
     json.dump(pred, f)
 ```
 
-### [ ] 3. Evaluation can't run in `--run` (no Docker daemon) (`run.sh:209-225`)
+### [x] 3. ~~Evaluation can't run in `--run` (no Docker daemon) (`run.sh:209-225`)~~
 SWE-bench harness runs tests inside a Docker container, so it needs a
 Docker daemon. `--interactive` mounts the host socket, but `--run` does not
 and no in-container `dockerd` is started. `run_evaluation` fails, `|| true`
