@@ -80,7 +80,6 @@ python3 -c "
 import json
 with open('${OUTPUT_DIR}/patch.diff', 'r') as f:
     patch = f.read()
-patch = patch.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"').replace('\n', '\\\\n')
 pred = [{
     'instance_id': '${INSTANCE_ID}',
     'model_name_or_path': 'agent',

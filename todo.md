@@ -19,7 +19,7 @@ Fix options:
 - Redirect only the python `print(json.dumps(data))` into the file:
   `docker run --rm python:3.10-slim bash -c "pip install -q datasets >/dev/null 2>&1; python3 -c '...print(json.dumps(data))...'" > "$CACHE_FILE" 2>/dev/null`
 
-### [ ] 2. Patch is double-escaped → `predictions.json` corrupt (`entrypoint.sh:83`)
+### [x] 2. ~~Patch is double-escaped → `predictions.json` corrupt (`entrypoint.sh:83`)~~
 ```python
 patch = patch.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
 ...
