@@ -1,22 +1,24 @@
-FROM swe-pi-base:latest
+FROM swe-base:latest
 
-# Install Node.js (need root for apt)
+# ==============================================================================
+# PI AGENT — Node.js + pi CLI on top of base
+# ==============================================================================
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
-USER agent
 
-# Install Pi coding agent (need root for global npm)
-USER root
+USER agent
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
-USER agent
 
-# Create agent subdirectory and copy configs there (Pi expects ~/.pi/agent/)
+# Copy Pi config (mounted into container at runtime)
 RUN mkdir -p /home/agent/.pi/agent
-COPY --chown=agent:agent .pi/settings.json .pi/models.json .pi/auth.json /home/agent/.pi/agent/
+COPY --chown=agent:agent .pi/settings.json .pi/models.json /home/agent/.pi/agent/
 COPY --chown=agent:agent .pi/npm/ /home/agent/.pi/npm/
 
-ENTRYPOINT ["/bin/bash"]
+# Entrypoint: generic clone → run agent → extract patch → eval
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

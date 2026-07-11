@@ -1,12 +1,12 @@
 services:
-  swe-pi-sandbox:
-    image: swe-pi-sandbox
+  swe-pi:
+    image: swe-pi
     container_name: pi_swe_evaluator
     environment:
       - ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./auth.json:/home/agent/.pi/auth.json:ro
+      - ./agents/pi/.pi/auth.json:/home/agent/.pi/auth.json:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     stdin_open: true

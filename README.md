@@ -1,25 +1,6 @@
 # SWE-bench + Pi Coding Agent
 
-A locked-down Docker sandbox for running the **Pi coding agent** (powered by a local llama.cpp model) against **SWE-bench Verified** tasks — and comparing results against other agents.
-
-## What This Is
-
-This repo sets up an isolated evaluation environment where:
-
-1. A local LLM (llama.cpp on `localhost:11434`) runs the Pi coding agent inside a hardened Docker container
-2. The agent attempts to fix real bugs in 5 open-source projects from SWE-bench Verified
-3. Generated patches are packaged and evaluated using the official SWE-bench harness
-4. Results can be compared against other agents (e.g., a friend's Codex agent)
-
-## Benchmark Instances
-
-| Instance ID | Project | Bug Description |
-|---|---|---|
-| `django__django-11039` | Django | `sqlmigrate` crashes on multi-database setups with non-standard naming — should inspect migration footprint instead of assuming a linear chain back to initial |
-| `scikit-learn__scikit-learn-10508` | scikit-learn | `LabelEncoder` fails when `transform` is called on an empty array or one containing completely new string categories — should raise a clear `ValueError` |
-| `astropy__astropy-14995` | Astropy | `NDDataRef` mask initialization fails when a mask is passed as a constant operand during deep copy arithmetic — needs basic type validation |
-| `pytest-dev__pytest-7407` | pytest | `pytest.approx` throws a `TypeError` instead of resolving cell approximation when comparing complex numbers inside nested lists/tuples |
-| `requests__requests-3362` | Requests | `json` parameter in `requests.request` rejects unicode strings in Python 2/3 transitions when handling raw byte streams, throwing an encoding `AttributeError` |
+A locked-down Docker sandbox for running coding agents against **SWE-bench Verified** tasks.
 
 ## Repo Structure
 
@@ -27,161 +8,114 @@ This repo sets up an isolated evaluation environment where:
 swe-bench/
 ├── README.md                      # This file
 ├── docker-compose.yml             # Container orchestration (interactive mode)
-├── .pi/                           # Agent config (mounted into containers)
-│   ├── settings.json              # Provider, model, retry settings
-│   ├── models.json                # Local llama.cpp provider definition
-│   └── auth.json                  # API keys (read-only mount)
 │
 ├── agents/pi/                     # Pi agent container definition
+│   ├── .pi/                       # Pi config (settings, models, auth, npm)
+│   │   ├── settings.json          # Provider, model, retry settings
+│   │   ├── models.json            # Local llama.cpp provider definition
+│   │   └── npm/                   # Pi packages
 │   ├── Dockerfile.base            # Base: Python 3.10 + swebench + pyenv + system deps
 │   ├── Dockerfile.pi              # Pi agent on top of base (Node.js + pi CLI)
-│   └── entrypoint.sh              # Container entrypoint script
+│   └── entrypoint.sh              # Generic clone → run agent → extract patch → eval
 │
 └── orchestration/                 # Host-side scripts
-    ├── run.sh                     # Build images + start interactive container
-    └── harness.sh                 # Automated headless runner (--all, --list, per-instance)
+    └── run.sh                     # Unified: --index, --list, --build, --run, --run-all
 ```
 
-## Architecture
+## Quick Start
 
+### 1. Index the dataset (first time only)
+
+```bash
+./orchestration/run.sh --index
 ```
-┌─────────────────────────────────────────────┐
-│  Host Machine                                │
-│                                              │
-│  llama.cpp (:11434) ──→ host.docker.internal │
-│                                              │
-│  ┌──────────────────────────────────────┐    │
-│  │ pi_swe_evaluator (Docker container)   │    │
-│  │                                      │    │
-│  │  Pi coding agent                     │    │
-│  │  → connects to llama.cpp via         │    │
-│  │     host.docker.internal:11434       │    │
-│  │                                      │    │
-│  │  SWE-bench harness (Python)          │    │
-│  │  → clones repos, runs tests          │    │
-│  │  → evaluates patches                 │    │
-│  └──────────────────────────────────────┘    │
-└─────────────────────────────────────────────┘
+
+Fetches and caches all 500 SWE-bench Verified instances from HuggingFace.
+
+### 2. Build images
+
+```bash
+./orchestration/run.sh --build
+```
+
+Builds `swe-base` (shared infrastructure) + `swe-pi` (Pi agent on top).
+
+### 3. Run an agent against a specific instance
+
+```bash
+./orchestration/run.sh --run pi django__django-11039
+```
+
+Clones the repo, runs Pi headlessly, extracts the patch, evaluates it. Results persist in `outputs/django__django-11039/`.
+
+### 4. Run against all instances
+
+```bash
+./orchestration/run.sh --run-all pi
+```
+
+Iterates through all 500 verified instances sequentially.
+
+### 5. Check status
+
+```bash
+./orchestration/run.sh --status
+```
+
+Shows color-coded completion overview.
+
+## How it works
+
+### Base image (`swe-base`)
+Contains everything any agent container needs:
+- Python 3.10 + pyenv (7 versions: 3.5–3.11)
+- swebench harness + common tooling (tox, pytest, cython, etc.)
+- System deps (gcc, make, cmake, imagemagick, ffmpeg, graphviz, texlive*, etc.)
+- Docker CLI (for DinD evaluation)
+
+### Agent image (`swe-pi`)
+Layers the Pi coding agent on top of base:
+- Node.js + `pi` CLI
+- Pi config (provider, model, auth keys mounted at runtime)
+- Generic entrypoint that handles clone → run → extract → eval
+
+### Entrypoint (shared across agents)
+The entrypoint script is generic — any agent container (pi, codex, claude) can use it:
+1. Receives: `instance_id`, `repo_url`, `base_commit`, `problem_statement`
+2. Clones repo at correct commit
+3. Runs the agent command (`pi -p` for Pi)
+4. Extracts patch via `git diff`
+5. Evaluates using swebench harness
+6. Saves results to `outputs/<instance_id>/`
+
+### Output structure
+```
+outputs/<instance_id>/
+├── meta.json                # instance_id, repo_url, base_commit
+├── problem_statement.txt    # Full GitHub issue text
+├── agent_output.txt         # Raw stdout from agent
+├── session.jsonl            # Full pi session (tool calls, responses)
+├── patch.diff               # Git diff of all changes made
+├── result.json              # {"status": "resolved|failed|no_patch", "elapsed_seconds": N}
+└── eval/
+    ├── predictions.json     # SWE-bench JSON input
+    └── harness.log          # Full evaluation output
 ```
 
 ## Security Hardening
 
-The evaluation container is intentionally locked down:
-
-- **Read-only root filesystem** — writable tmpfs only for `/tmp` and the workspace
+Containers are intentionally locked down:
+- **Read-only root filesystem** — writable tmpfs only for `/tmp` and workspace
 - **Dropped all capabilities** — only `NET_RAW` added back
 - **No new privileges** — `no-new-privileges:true`
 - **Memory limit** — 8 GB RAM + swap, 500 PID limit
-- **No outbound internet** — uses default bridge network (no extra networks added)
 - **Unprivileged user** — runs as `agent` user, not root
-
-## Quick Start
-
-### 1. Build images
-
-```bash
-./orchestration/run.sh
-```
-
-This builds two images:
-- **`swe-pi-base`** — Python 3.10 + swebench + pyenv (7 Python versions) + system deps + workspace
-- **`swe-pi-sandbox`** — base + Node.js + Pi coding agent
-
-The base image includes all system dependencies, build tools, and common Python packages needed by the SWE-bench Verified suite. Repos are cloned at runtime.
-
-### 2. Run the agent (interactive)
-
-```bash
-./orchestration/run.sh
-```
-The container starts interactively with the Pi coding agent ready to go.
-
-### 3. Automated harness (recommended)
-
-The harness runs pi headlessly against any subset of instances:
-
-```bash
-# List available instances
-./orchestration/harness.sh --list "django"
-
-# Show problem details
-./orchestration/harness.sh --info django__django-11039
-
-# Run specific instances
-./orchestration/harness.sh django__django-11039 pytest-dev__pytest-7407
-
-# Run all 500 verified instances
-./orchestration/harness.sh --all
-
-# Check status of completed runs
-./orchestration/harness.sh --status
-```
-
-All results (patches, sessions, eval logs) persist in `outputs/<instance_id>/` after containers stop.
-
-## How run.sh and harness.sh work
-
-### `run.sh` — Interactive container
-Builds the Docker images (if missing) and starts an **interactive** container where you can manually run the Pi agent. Use this when you want to:
-- Debug an instance by hand
-- Run the agent interactively with full terminal access
-- Test prompts before automating
-
-```bash
-./orchestration/run.sh
-# → drops you into a shell inside the sandboxed container
-```
-
-### `harness.sh` — Automated headless runner
-Runs Pi **non-interactively** (`pi -p`) against specific instances or all 500. Each instance gets its own container, runs headlessly, and saves results to disk. Use this for:
-- Batch evaluation of many instances
-- Reproducible runs with full session capture
-- Comparing agent performance across the suite
-
-```bash
-./orchestration/harness.sh django__django-11039 pytest-dev__pytest-7407
-# → clones repos, runs pi -p headlessly, extracts patch, evaluates, saves results
-```
-
-### Interaction between them
-- Both use the same Docker images (`swe-pi-base`, `swe-pi-sandbox`)
-- `run.sh` builds images on-demand; `harness.sh` expects them to exist (runs pre-flight check)
-- `run.sh` mounts workspace for interactive use; `harness.sh` mounts workspace for persistent output
-- Results from `harness.sh` persist in `outputs/` even after containers are removed
-- You can use `run.sh` to debug a failing instance, then re-run it with `harness.sh`
 
 ## Configuration
 
 ### LlamaCPP / Local Model
-
-- **Endpoint:** `http://localhost:11434` (or `http://host.docker.internal:11434/v1` from inside Docker)
-- **API Key:** `local-key` — this is a **bogus/fake key** and is **safe to publish**. Do not treat it as real credentials.
-
-### Pi Agent Config
-
-| File | Purpose |
-|---|---|
-| `.pi/settings.json` | Default provider (`local`), model (`qwen3.6-35b-a3b`), retry settings, theme |
-| `.pi/models.json` | Provider definition — `local` (llama.cpp) |
-| `.pi/auth.json` | Auth keys mounted into the container at runtime |
-| `.vmpirc.json` | VM network config — declares localhost:11434 as a local service |
-
-### Docker Compose
-
-```yaml
-services:
-  swe-pi-sandbox:
-    image: swe-pi-sandbox
-    container_name: pi_swe_evaluator
-    environment:
-      - ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./auth.json:/home/agent/.pi/auth.json:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-```
+- **Endpoint:** `http://localhost:11434` (or `host.docker.internal:11434/v1` from inside Docker)
+- **API Key:** `local-key` — bogus/fake key, safe to publish
 
 ## Git Remote
-
 - **origin:** https://github.com/SterlingNerd/swe-bench.git
