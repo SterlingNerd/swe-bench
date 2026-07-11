@@ -21,6 +21,28 @@ This repo sets up an isolated evaluation environment where:
 | `pytest-dev__pytest-7407` | pytest | `pytest.approx` throws a `TypeError` instead of resolving cell approximation when comparing complex numbers inside nested lists/tuples |
 | `requests__requests-3362` | Requests | `json` parameter in `requests.request` rejects unicode strings in Python 2/3 transitions when handling raw byte streams, throwing an encoding `AttributeError` |
 
+## Repo Structure
+
+```
+swe-bench/
+├── README.md                      # This file
+├── docker-compose.yml             # Container orchestration (interactive mode)
+├── .pi/                           # Pi agent config (mounted into containers)
+│   ├── settings.json              # Provider, model, retry settings
+│   ├── models.json                # Local llama.cpp provider definition
+│   └── auth.json                  # API keys (read-only mount)
+│
+├── containers/                    # Docker image definitions
+│   ├── Dockerfile.base            # Base: Python 3.10 + swebench + pyenv + system deps
+│   ├── Dockerfile.pi              # Pi agent on top of base (Node.js + pi CLI)
+│   └── entrypoint.sh              # Container entrypoint script
+│
+└── orchestration/                 # Host-side scripts
+    ├── run.sh                     # Build images + start interactive container
+    ├── harness.sh                 # Automated headless runner (--all, --list, per-instance)
+    └── swe-bench.sh               # Legacy helper (clone, prompts, eval)
+```
+
 ## Architecture
 
 ```
@@ -59,7 +81,7 @@ The evaluation container is intentionally locked down:
 ### 1. Build images
 
 ```bash
-./run.sh
+./orchestration/run.sh
 ```
 
 This builds two images:
@@ -71,29 +93,29 @@ The base image includes all system dependencies, build tools, and common Python 
 ### 2. Run the agent (interactive)
 
 ```bash
-./run.sh
+./orchestration/run.sh
 ```
 The container starts interactively with the Pi coding agent ready to go.
 
 ### 3. Automated harness (recommended)
 
-The new harness runs pi headlessly against any subset of instances:
+The harness runs pi headlessly against any subset of instances:
 
 ```bash
 # List available instances
-./harness.sh --list "django"
+./orchestration/harness.sh --list "django"
 
 # Show problem details
-./harness.sh --info django__django-11039
+./orchestration/harness.sh --info django__django-11039
 
 # Run specific instances
-./harness.sh django__django-11039 pytest-dev__pytest-7407
+./orchestration/harness.sh django__django-11039 pytest-dev__pytest-7407
 
 # Run all 500 verified instances
-./harness.sh --all
+./orchestration/harness.sh --all
 
 # Check status of completed runs
-./harness.sh --status
+./orchestration/harness.sh --status
 ```
 
 All results (patches, sessions, eval logs) persist in `outputs/<instance_id>/` after containers stop.
