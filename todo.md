@@ -91,7 +91,7 @@ used) and reconcile with the README's `auth.json` description.
 that become part of the argument; the later `cp /tmp/pi-sessions/${INSTANCE_ID}/session.jsonl` looks for the unquoted path and fails (`|| true`).
 Fix: drop the single quotes: `--session-id ${INSTANCE_ID}`.
 
-### [ ] 9. Dead `.replace('/', '/')` no-op (`run.sh:206`)
+### [x] 9. ~~Dead `.replace('/', '/')` no-op (`run.sh:206`)~~
 Leftover no-op string replace on `repo`. Remove.
 
 ### [ ] 10. Variable-in-`python3 -c` injection pattern (`run.sh:200-202`, `entrypoint.sh:81`)
