@@ -104,7 +104,7 @@ a quote. Fix: pass values via env vars or stdin (`python3 - "$id" <<'PY'`).
 failure inside `do_run` won't stop the batch.
 Fix: use process substitution `while read ...; do done < <(fetch_dataset | ...)`.
 
-### [ ] 12. `do_build` builds `swe-base` twice (`run.sh` `do_build`)
+### [x] 12. ~~`do_build` builds `swe-base` twice (`run.sh` `do_build`)~~
 `agents/base/` is treated as an agent in the loop, so `swe-base` is built
 both explicitly and in the loop. Harmless redundancy.
 Fix: skip `base` in the agent loop (or build it only in the loop).

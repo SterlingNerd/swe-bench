@@ -150,10 +150,11 @@ do_build() {
         echo "${BASE_IMAGE} already exists."
     fi
 
-    # Build agent images
+    # Build agent images (skip 'base' — built explicitly above)
     for agent_dir in "${AGENTS_DIR}"/*/; do
         [ -d "$agent_dir" ] || continue
         agent_name=$(basename "$agent_dir")
+        [ "$agent_name" = "base" ] && continue
         image_name="swe-${agent_name}"
         dockerfile="${agent_dir}/Dockerfile.${agent_name}"
 
