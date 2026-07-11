@@ -6,7 +6,7 @@
 #   ./run.sh --help              Show this help
 #   ./run.sh --index             Fetch and cache problem listings from HuggingFace
 #   ./run.sh --list [filter]     List problems (optional grep filter)
-#   ./run.sh --build             Build all Docker images
+#   ./run.sh --build [agent]     Build base + all (or one) agent Docker image(s)
 #   ./run.sh --run <agent> <id>  Run an agent against a specific instance
 #   ./run.sh --run-all <agent>   Run agent against all 500 instances
 #   ./run.sh --eval <agent>      Evaluate collected patches for an agent
@@ -51,8 +51,19 @@ done
 # DATASET — fetch and cache from HuggingFace
 # ==============================================================================
 fetch_dataset() {
+    local needs_fetch=0
     if [ ! -f "$CACHE_FILE" ]; then
-        echo "Fetching dataset from HuggingFace (first time, may take a moment)..."
+        needs_fetch=1
+    elif [ ! -s "$CACHE_FILE" ]; then
+        echo "Cache file is empty, re-fetching..."
+        needs_fetch=1
+    elif ! python3 -c "import json; d=json.load(open('$CACHE_FILE')); assert isinstance(d, list) and len(d)>0" 2>/dev/null; then
+        echo "Cache file is corrupted, re-fetching..."
+        needs_fetch=1
+    fi
+
+    if [ "$needs_fetch" -eq 1 ]; then
+        echo "Fetching dataset from HuggingFace (may take a moment)..."
         docker run --rm -e HF_DATASET="${HF_DATASET}" python:3.10-slim bash -c "
 pip install -q datasets >/dev/null 2>&1
 python3 -c \"
@@ -104,10 +115,12 @@ COMMANDS
       sorted by repo then version. Optional FILTER is a case-insensitive
       substring match against any field (e.g. a repo name or instance id).
 
-  --build
-      Build the Docker images: the shared 'swe-base' image plus one image per
-      agent folder under agents/ (named 'swe-<agent>'). Existing images are
-      skipped. Run this before --run, --run-all, --eval, or --interactive.
+  --build [AGENT]
+      Build the Docker images. The shared 'swe-base' image is always built
+      first, then each agent folder under agents/ (named 'swe-<agent>').
+      If AGENT is given (e.g. pi, codex), only that agent's image is built;
+      otherwise all agent images are built. Existing images are skipped.
+      Run this before --run, --run-all, --eval, or --interactive.
 
   --run <AGENT> <INSTANCE_ID>
       Run an agent against a single instance. AGENT is a folder name under
@@ -201,9 +214,18 @@ print(f'\nTotal: {len(data)} instances')
 # BUILD — build all Docker images
 # ==============================================================================
 do_build() {
+    local only_agent="${1:-}"
+    if [ -n "$only_agent" ] && [ ! -d "${AGENTS_DIR}/${only_agent}" ]; then
+        echo "ERROR: Agent '${only_agent}' not found. Available agents:"
+        for d in "${AGENTS_DIR}"/*/; do
+            [ -d "$d" ] && [ "$(basename "$d")" != "base" ] && echo "  $(basename "$d")"
+        done
+        exit 1
+    fi
+
     echo "=== Building Docker Images ==="
 
-    # Build base image
+    # Build base image (always built first)
     if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
         echo "Building ${BASE_IMAGE}..."
         docker build -f "${AGENTS_DIR}/base/Dockerfile.base" -t "$BASE_IMAGE" "${AGENTS_DIR}/base/"
@@ -216,6 +238,7 @@ do_build() {
         [ -d "$agent_dir" ] || continue
         agent_name=$(basename "$agent_dir")
         [ "$agent_name" = "base" ] && continue
+        [ -n "$only_agent" ] && [ "$agent_name" != "$only_agent" ] && continue
         image_name="swe-${agent_name}"
         dockerfile="${agent_dir}/Dockerfile.${agent_name}"
 
@@ -527,7 +550,7 @@ case "$1" in
         do_list "${2:-}"
         ;;
     --build)
-        do_build
+        do_build "${2:-}"
         ;;
     --run)
         do_run "${2:-}" "${3:-}"

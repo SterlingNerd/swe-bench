@@ -36,10 +36,13 @@ Fetches and caches all 500 SWE-bench Verified instances from HuggingFace.
 ### 2. Build images
 
 ```bash
-./run.sh --build
+./run.sh --build          # build base + all agent images
+./run.sh --build pi     # build base, then only the 'pi' agent image
 ```
 
-Builds `swe-base` (shared infrastructure) + `swe-pi` (Pi agent on top).
+Always builds `swe-base` (shared infrastructure), then each agent image
+(`swe-<agent>`). Pass an agent name (e.g. `pi`, `codex`) to build just that
+one; omit it to build all agent images. Existing images are skipped.
 
 ### 3. Run an agent against a specific instance
 
