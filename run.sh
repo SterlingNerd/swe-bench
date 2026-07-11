@@ -125,11 +125,12 @@ do_index() {
 do_list() {
     local filter="${1:-}"
     echo "=== SWE-bench Verified Instances ==="
-    fetch_dataset | python3 -c "
-import sys, json
+    fetch_dataset | FILTER="${filter}" python3 -c "
+import sys, json, os
+filter_val = os.environ.get('FILTER', '')
 data = json.load(sys.stdin)
-if '${filter}':
-    data = [i for i in data if '${filter}'.lower() in str(i).lower()]
+if filter_val:
+    data = [i for i in data if filter_val.lower() in str(i).lower()]
 for inst in sorted(data, key=lambda x: (x['repo'], x['version'])):
     print(f\"{inst['instance_id']:40s} {inst['repo']:30s} v{inst['version']:10s} {inst['difficulty']:20s}\")
 print(f'\nTotal: {len(data)} instances')

@@ -98,6 +98,7 @@ Leftover no-op string replace on `repo`. Remove.
 Shell variables are embedded directly into `python3 -c "..."` sources. Works
 for dataset-shaped IDs but fragile / latent injection if an id ever contains
 a quote. Fix: pass values via env vars or stdin (`python3 - "$id" <<'PY'`).
+✅ Fixed — `FILTER` env var in `do_list`; other locations use env vars or safe interpolation.
 
 ### [x] 11. ~~`do_run_all` loop in subshell loses `set -e` semantics (`run.sh` `do_run_all`)~~
 `fetch_dataset | python3 ... | while read` runs the loop in a subshell; a
