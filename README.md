@@ -44,6 +44,15 @@ Always builds `swe-base` (shared infrastructure), then each agent image
 (`swe-<agent>`). Pass an agent name (e.g. `pi`, `codex`) to build just that
 one; omit it to build all agent images. Existing images are skipped.
 
+To force a from-scratch build (e.g. to pull the latest pi CLI or refresh
+cached layers), use `--rebuild` instead — it always rebuilds with `--no-cache`
+and skips nothing:
+
+```bash
+./run.sh --rebuild        # rebuild base + all agent images from scratch
+./run.sh --rebuild pi     # rebuild base, then only the 'pi' agent image
+```
+
 ### 3. Run an agent against a specific instance
 
 ```bash
