@@ -173,7 +173,7 @@ EOF
 # ==============================================================================
 do_index() {
     echo "=== Indexing SWE-bench Verified ==="
-    fetch_dataset
+    fetch_dataset >/dev/null
     local count
     count=$(CACHE_FILE="${CACHE_FILE}" python3 -c "import json, os; print(len(json.load(open(os.environ['CACHE_FILE']))))")
     echo "Cached ${count} instances at ${CACHE_FILE}"
