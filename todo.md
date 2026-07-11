@@ -94,7 +94,7 @@ Fix: drop the single quotes: `--session-id ${INSTANCE_ID}`.
 ### [x] 9. ~~Dead `.replace('/', '/')` no-op (`run.sh:206`)~~
 Leftover no-op string replace on `repo`. Remove.
 
-### [ ] 10. Variable-in-`python3 -c` injection pattern (`run.sh:200-202`, `entrypoint.sh:81`)
+### [x] 10. ~~Variable-in-`python3 -c` injection pattern (`run.sh:200-202`, `entrypoint.sh:81`)~~
 Shell variables are embedded directly into `python3 -c "..."` sources. Works
 for dataset-shaped IDs but fragile / latent injection if an id ever contains
 a quote. Fix: pass values via env vars or stdin (`python3 - "$id" <<'PY'`).

@@ -45,12 +45,12 @@ done
 fetch_dataset() {
     if [ ! -f "$CACHE_FILE" ]; then
         echo "Fetching dataset from HuggingFace (first time, may take a moment)..."
-        docker run --rm python:3.10-slim bash -c "
+        docker run --rm -e HF_DATASET="${HF_DATASET}" python:3.10-slim bash -c "
 pip install -q datasets >/dev/null 2>&1
 python3 -c \"
 from datasets import load_dataset
-import json
-ds = load_dataset('${HF_DATASET}', split='test')
+import json, os
+ds = load_dataset(os.environ['HF_DATASET'], split='test')
 data = [dict(i) for i in ds]
 print(json.dumps(data))
 \"
@@ -61,11 +61,11 @@ print(json.dumps(data))
 
 get_instance() {
     local instance_id="$1"
-    fetch_dataset | python3 -c "
-import sys, json
+    fetch_dataset | INSTANCE_ID="${instance_id}" python3 -c "
+import sys, json, os
 data = json.load(sys.stdin)
 for inst in data:
-    if inst['instance_id'] == '${instance_id}':
+    if inst['instance_id'] == os.environ.get('INSTANCE_ID', ''):
         print(json.dumps(inst))
         sys.exit(0)
 print('ERROR: Instance not found: ${instance_id}', file=sys.stderr)
@@ -115,7 +115,7 @@ do_index() {
     echo "=== Indexing SWE-bench Verified ==="
     fetch_dataset
     local count
-    count=$(python3 -c "import json; print(len(json.load(open('${CACHE_FILE}'))))")
+    count=$(CACHE_FILE="${CACHE_FILE}" python3 -c "import json, os; print(len(json.load(open(os.environ['CACHE_FILE']))))")
     echo "Cached ${count} instances at ${CACHE_FILE}"
 }
 
@@ -307,11 +307,11 @@ do_eval() {
 
     # Build predictions.json from all collected patches
     local tmp_preds=$(mktemp)
-    python3 -c "
+    EVAL_DIR="${eval_dir}" python3 -c "
 import sys, json, os
 results = []
 for instance_id in sys.argv[1:]:
-    patch_path = os.path.join('${eval_dir}', instance_id, 'patch.diff')
+    patch_path = os.path.join(os.environ['EVAL_DIR'], instance_id, 'patch.diff')
     if not os.path.exists(patch_path):
         continue
     with open(patch_path) as f:
@@ -389,7 +389,7 @@ do_status() {
 
         if [ -f "${instance_dir}result.json" ]; then
             local status
-            status=$(python3 -c "import json; print(json.load(open('${instance_dir}result.json'))['status'])" 2>/dev/null || echo "unknown")
+            status=$(INSTANCE_DIR="${instance_dir}" python3 -c "import json, os; print(json.load(open(os.environ['INSTANCE_DIR'] + 'result.json'))['status'])" 2>/dev/null || echo "unknown")
             case "$status" in
                 resolved) resolved=$((resolved + 1)); echo -e "\033[32m✓\033[0m $instance_id ($status)" ;;
                 failed)   failed=$((failed + 1));   echo -e "\033[31m✗\033[0m $instance_id ($status)" ;;
