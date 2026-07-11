@@ -48,7 +48,7 @@ Fix: separated work from eval. `--run`/`--run-all` now only collect patches
 (no Docker needed inside the agent container). A new `--eval <agent>` command
 runs a harness container with Docker access to evaluate all collected patches.
 
-### [ ] 4. Output location mismatch → `do_status` never finds results
+### [x] 4. ~~Output location mismatch → `do_status` never finds results~~
 (`entrypoint.sh:22` vs `run.sh` `do_status` / `README.md:95`)
 Entrypoint writes to `${WORKSPACE}/outputs/<id>` (=$SWE_WORKSPACE_DIR/outputs),
 while `do_status` and README read `${SWE_OUTPUT_DIR:-$REPO_ROOT/outputs}`.
