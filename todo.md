@@ -61,13 +61,13 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
      - any pi debug logs or state files
    - [x] Ensure these don't interfere with the eval step (different filenames/extensions)
 
-8. [ ] Eval step: convert outputs → SWE-bench prediction JSONL → run harness
-   - [ ] Install swebench package (`pip install swebench`) if not present — add `./run.sh --init` for this
-   - [ ] Read the [SWE-bench eval guide](https://www.swebench.com/SWE-bench/guides/evaluation/) carefully
-   - [ ] Design the conversion:
+8. [x] Eval step: convert outputs → SWE-bench prediction JSONL → run harness
+   - [x] Install swebench package (`pip install swebench`) if not present — add `./run.sh --init` for this
+   - [x] Read the [SWE-bench eval guide](https://www.swebench.com/SWE-bench/guides/evaluation/) carefully
+   - [x] Design the conversion:
      - Scan `/workspace/outputs/[repo__num]/` dirs for `patch.diff` files per instance
      - Map each patch to SWE-bench prediction format (JSONL with instance_id, model_patch)
-   - [ ] Call official swebench eval harness (not reimplement)
+   - [x] Call official swebench eval harness (not reimplement)
    - [ ] Parse and summarize results (pass/fail, test outcomes)
    - [ ] Consider making this a single `./eval.sh` script for reproducibility
 
