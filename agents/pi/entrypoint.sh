@@ -101,8 +101,10 @@ if [ -d "/tmp/pi-sessions/${INSTANCE_ID}" ]; then
 fi
 
 # Extract patch via git diff (from inside the repo)
+# Must stage new/untracked files first — git diff alone drops them
 echo "  Extracting patch..."
-git diff > "${OUTPUT_DIR}/patch.diff" 2>/dev/null || {
+git add -A 2>/dev/null || true
+git diff --cached > "${OUTPUT_DIR}/patch.diff" 2>/dev/null || {
     echo "  WARNING: git diff failed"
     touch "${OUTPUT_DIR}/patch.diff"
 }

@@ -77,20 +77,35 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
    - [ ] Decide: baked config per-provider? env var override? runtime rewrite?
 
 ────────────────────────────────────────────────────────────────────────────────
-### BLOCKING BUGS FROM REVIEW (fix these first)
+### REVIEW FIXES (applied)
 
-B. [ ] Fix pi working directory — cd into repo before running pi, git diff from there
-C. [ ] Fix pi config discovery — use PI_CODING_AGENT_DIR=/tmp/.pi/agent or restructure .pi layout
-E. [ ] Fix uid 1001 write paths — ensure outputs are writable by container user
-D. [ ] Stop swallowing errors — remove `|| true` on critical commands, surface real failures
+B. [x] Fix pi working directory — cd into repo before running pi, git diff from there
+C. [x] Fix pi config discovery — use PI_CODING_AGENT_DIR=/tmp/.pi/agent with .pi/agent/ layout
+E. [x] Fix uid 1001 write paths — outputs to /workspace/outputs/ (mounted rw)
+D. [x] Stop swallowing errors — remove `|| true` on critical commands, surface real failures
+
+S1. [x] Remove --cap-add NET_RAW (unnecessary)
+S2. [x] Fix memory-swap: 8g → 16g
+S3. [x] Make root filesystem --read-only in container
+S4. [x] Fix cleanup() trap — only kill containers this script created
+S5. [x] Pin pi-coding-agent version in build_bundle.sh (not @latest)
+S6. [x] Remove Dockerfile.pi and .dockerignore
 
 ────────────────────────────────────────────────────────────────────────────────
-### SECURITY & CLEANUP (fix after blocking bugs)
+### NEW ISSUES FROM SECOND REVIEW
 
-S1. [ ] Remove --cap-add NET_RAW (unnecessary)
-S2. [ ] Fix memory-swap: either increase it or remove the misleading README claim
-S3. [ ] Make root filesystem --read-only in container
-S4. [ ] Fix cleanup() trap — only kill containers this script created (use labels or name prefix)
-S5. [ ] Pin pi-coding-agent version in build_bundle.sh (not @latest)
-S6. [ ] Remove Dockerfile.pi (already deleted by user, verify)
-S7. [ ] .pi layout: ensure .pi/agent/ subfolder exists for PI_CODING_AGENT_DIR
+CRITICAL:
+1. [x] git diff drops new/untracked files — fixed: git add -A && git diff --cached
+2. [ ] --eval doesn't match README ("Docker-free" vs actual harness) — README updated to match code
+3. [ ] Unreproducible result folding — eval_local_worker.py orphaned, need to decide path
+
+MEDIUM:
+4. [x] CONTAINER_ID capture bug — removed broken cleanup mechanism, --rm handles it
+5. [ ] --run-all over 500 instances pulls eval image per instance — document in README
+6. [ ] eval_local_worker.py Django branch is coarse — acceptable for benchmark
+7. [ ] session capture likely never copies (pi names by session-id, not instance-id)
+
+LOW:
+8. [x] todo.md stale — updated to reflect reality
+9. [x] README drift — rewritten to match current code
+10. [ ] build_bundle.sh rm -rf comment — low priority

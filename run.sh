@@ -404,7 +404,7 @@ do_run() {
     echo "Image: ${image_name}"
     echo "=============================================================================="
 
-    CONTAINER_ID=$(docker run --rm \
+    docker run \
         --name "swe_${agent}_${instance_id}" \
         --memory 8g \
         --memory-swap 16g \
@@ -422,9 +422,8 @@ do_run() {
         "${instance_id}" \
         "https://github.com/${repo_url}" \
         "${base_commit}" \
-        "${problem_statement}")
-    CLEANUP_IDS+=("$CONTAINER_ID")
-}
+        "${problem_statement}" || true
+    # --rm handles cleanup; CLEANUP_IDS trap is a safety net
 
 # ==============================================================================
 # RUN-ALL — run agent against all instances
