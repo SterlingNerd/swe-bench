@@ -32,7 +32,7 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
 4. [x] Pass inference URL so pi can connect inside the container
    - [x] Use pre-baked `models.json` + `auth.json` in the agent bundle (no secrets to worry about)
    - [x] Set baseUrl to `http://host.docker.internal:11434/v1` in the baked config
-   - [ ] Test: point pi at a mock server, verify it connects
+   - [x] Test: point pi at a mock server, verify it connects
 
 5. [x] Write `entrypoint.sh` shim
    - [x] Study existing `agents/pi/entrypoint.sh` — it already does most of this (clone, run pi, extract patch)
@@ -72,7 +72,7 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
    - [ ] Parse and summarize results (pass/fail, test outcomes)
    - [ ] Consider making this a single `./eval.sh` script for reproducibility
 
-9. [ ] Re-discuss inference URL configuration once the rest is working
-   - [ ] Current: hardcoded `http://host.docker.internal:11434/v1` in pre-baked models.json
+9. [x] Re-discuss inference URL configuration once the rest is working
+   - [x] Current: hardcoded `http://host.docker.internal:11434/v1` in pre-baked models.json
    - [ ] Future: allow overriding via env var / config for different providers (Anthropic, OpenRouter, etc.)
    - [ ] Decide: baked config per-provider? env var override? runtime rewrite?
