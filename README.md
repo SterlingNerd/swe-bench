@@ -61,7 +61,7 @@ and skips nothing. A SCOPE argument controls what is rebuilt:
 ./run.sh --run pi django__django-11039
 ```
 
-Clones the repo, runs Pi headlessly, and extracts the patch. Results persist in `outputs/django__django-11039/`. Evaluate afterward with `./run.sh --eval pi` (full swebench harness) or `./run.sh --eval-local pi` (lightweight, no eval images required — see below).
+Clones the repo, runs Pi headlessly, and extracts the patch. Results persist in `outputs/django__django-11039/`. Evaluate afterward with `./run.sh --eval pi` (Docker-free, quickstart-style — see below).
 
 ### 4. Run against all instances
 
@@ -71,26 +71,29 @@ Clones the repo, runs Pi headlessly, and extracts the patch. Results persist in 
 
 Iterates through all 500 verified instances sequentially.
 
-### 4b. Evaluate collected patches
+### 4b. Evaluate collected patches (Docker-free, quickstart-style)
 
 ```bash
-./run.sh --eval pi          # full swebench harness (needs pullable eval images)
-./run.sh --eval-local pi    # lightweight functional check (no eval images)
+./run.sh --eval pi          # evaluate collected patches (no Docker access)
 ./run.sh --summarize pi     # combine results -> outputs/summary.json
 ```
 
-**Evaluation images:** `--eval` runs the official swebench harness, which
-builds/runs per-instance test containers from prebuilt images named
-`swebench/sweb.eval.x86_64.<instance_id>:latest`. Those images must be
-**pullable from a registry** in your environment, or `--eval` will fail at the
-image-pull step (this is an environment precondition, not a code issue).
+Evaluation follows the [SWE-bench quickstart](https://www.swebench.com/SWE-bench/guides/quickstart/)
+methodology and is a **separate step from `--run`** (the agent "work" step).
+Containers are given **no Docker access** — eval runs inside `swe-base` (which
+bundles build tooling + pyenv pythons) and applies patches + runs tests directly.
 
-`--eval-local` is a fallback that does **not** require those images: for each
-collected patch it clones the repo at the base commit, applies the model patch
-+ the dataset's `test_patch`, installs the package in a pyenv venv, and runs the
-instance's `FAIL_TO_PASS` / `PASS_TO_PASS` tests with pytest. It is slower
-(it bootstraps each project) but works wherever the project's dependencies can
-be installed.
+For each collected patch, `--eval`:
+1. clones the repo at the base commit,
+2. applies the model patch **and** the dataset's `test_patch`,
+3. installs the project in a pyenv venv,
+4. runs the instance's `FAIL_TO_PASS` / `PASS_TO_PASS` tests
+   (Django uses `tests/runtests.py`; other repos use `pytest`).
+
+It writes `local_eval.json` per instance and folds the result into
+`result.json`. It can be slow (it bootstraps each project from source). A
+`predictions.json` in the standard SWE-bench format is also written, in case a
+Docker-enabled harness eval is ever run elsewhere.
 
 ### 5. Check status
 
@@ -107,7 +110,7 @@ Contains everything any agent container needs:
 - Python 3.10 + pyenv (7 versions: 3.5–3.11)
 - swebench harness + common tooling (tox, pytest, cython, etc.)
 - System deps (gcc, make, cmake, imagemagick, ffmpeg, graphviz, texlive*, etc.)
-- Docker CLI (for DinD evaluation)
+- Docker CLI (available in the image; evaluation runs Docker-free — see Evaluation)
 
 ### Agent image (`swe-pi`)
 Layers the Pi coding agent on top of base:
@@ -121,8 +124,7 @@ The entrypoint script is generic — any agent container (pi, codex, claude) can
 2. Clones repo at correct commit
 3. Runs the agent command (`pi -p` for Pi)
 4. Extracts patch via `git diff`
-5. Optionally evaluates using the swebench harness (`--eval`) or a lightweight
-   local check (`--eval-local`)
+5. Evaluation is a separate, Docker-free step (`--eval`); see Evaluation below
 6. Saves results to `outputs/<instance_id>/`
 
 ### Output structure
