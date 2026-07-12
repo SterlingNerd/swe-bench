@@ -11,7 +11,7 @@
 #
 # Container mounts (provided by swebench harness):
 #   /agent    → agent bundle (read-only) — Node.js + pi CLI + config
-#   /testbed  → writable testbed directory
+#   /workspace→ writable workspace directory (outputs go here)
 # ==============================================================================
 
 set -euo pipefail
@@ -65,10 +65,16 @@ mkdir -p "${OUTPUT_DIR}/eval"
 # Verification: write hello world
 echo "Hello from pi container at $(date)" > "${OUTPUT_DIR}/hello.txt"
 
-# Save problem metadata
-cat > "${OUTPUT_DIR}/meta.json" <<EOF
-{"instance_id": "${INSTANCE_ID}", "repo_url": "${REPO_URL}", "base_commit": "${BASE_COMMIT}"}
-EOF
+# Save problem metadata (use python3 for proper JSON escaping)
+python3 -c "
+import json, sys
+meta = {
+    'instance_id': sys.argv[1],
+    'repo_url': sys.argv[2],
+    'base_commit': sys.argv[3]
+}
+json.dump(meta, open(sys.argv[4], 'w'))
+" "${INSTANCE_ID}" "${REPO_URL}" "${BASE_COMMIT}" "${OUTPUT_DIR}/meta.json"
 echo "${PROBLEM_STATEMENT}" > "${OUTPUT_DIR}/problem_statement.txt"
 
 # Clone repo at base commit
@@ -95,9 +101,12 @@ pi -p --session-dir /tmp/pi-sessions "${PROBLEM_STATEMENT}" 2>&1 | tee "${AGENT_
     echo "  WARNING: pi exited with non-zero status"
 }
 
-# Save session file if it exists
-if [ -d "/tmp/pi-sessions/${INSTANCE_ID}" ]; then
-    cp "/tmp/pi-sessions/${INSTANCE_ID}/session.jsonl" "${OUTPUT_DIR}/session.jsonl" 2>/dev/null || true
+# Save session files (pi names sessions by UUID, not instance_id)
+# Copy all session files found — at least one should match this run
+if [ -d "/tmp/pi-sessions" ]; then
+    for sf in /tmp/pi-sessions/*/session.jsonl; do
+        [ -f "$sf" ] && cp "$sf" "${OUTPUT_DIR}/session.jsonl" 2>/dev/null && break
+    done
 fi
 
 # Extract patch via git diff (from inside the repo)

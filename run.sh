@@ -31,15 +31,8 @@
 set -euo pipefail
 
 # ==============================================================================
-# CLEANUP — remove containers this script created (by name prefix)
+# CLEANUP — docker --rm handles container removal on exit
 # ==============================================================================
-CLEANUP_IDS=()
-cleanup() {
-    for cid in "${CLEANUP_IDS[@]}"; do
-        docker rm -f "$cid" 2>/dev/null || true
-    done
-}
-trap cleanup EXIT
 
 # ==============================================================================
 # CONFIGURATION
@@ -76,7 +69,7 @@ fetch_dataset() {
 
     if [ "$needs_fetch" -eq 1 ]; then
         echo "Fetching dataset from HuggingFace (may take a moment)..."
-        docker run --rm -e HF_DATASET="${HF_DATASET}" python:3.10-slim bash -c '
+        if ! docker run --rm -e HF_DATASET="${HF_DATASET}" python:3.10-slim bash -c '
 pip install -q datasets >/dev/null 2>&1
 python3 << "PYEOF"
 from datasets import load_dataset
@@ -85,7 +78,11 @@ ds = load_dataset(os.environ["HF_DATASET"], split="test")
 data = [dict(i) for i in ds]
 print(json.dumps(data))
 PYEOF
-' > "$CACHE_FILE" 2>/dev/null
+' > "$CACHE_FILE" 2>/dev/null; then
+            echo "ERROR: Failed to fetch dataset from HuggingFace."
+            rm -f "$CACHE_FILE"
+            exit 1
+        fi
     fi
     cat "$CACHE_FILE"
 }
@@ -425,9 +422,23 @@ do_run() {
 
 # ==============================================================================
 # RUN-ALL — run agent against all instances
+#
+# Usage: ./run.sh --run-all <agent> [--timeout <seconds>] [--resume]
+#   --timeout N  Skip instances that took longer than N seconds (default: no limit)
+#   --resume     Skip instances that already have a result.json
 # ==============================================================================
 do_run_all() {
-    local agent="${1:?Usage: $0 --run-all <agent>}"
+    local agent="${1:?Usage: $0 --run-all <agent> [--timeout N] [--resume]}"
+    shift
+
+    local timeout_sec="" resume=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --timeout) timeout_sec="${2:?--timeout requires a number}"; shift 2 ;;
+            --resume)  resume=1; shift ;;
+            *)         echo "Unknown option: $1"; exit 1 ;;
+        esac
+    done
 
     # Validate agent exists
     if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
@@ -435,15 +446,28 @@ do_run_all() {
         exit 1
     fi
 
+    local count=0 skipped=0
     # Get all instance IDs
     while read -r instance_id; do
-        do_run "$agent" "$instance_id"
+        # Resume: skip instances that already have a result.json
+        if [ "$resume" = 1 ] && [ -f "${OUTPUT_DIR}/${instance_id}/result.json" ]; then
+            skipped=$((skipped + 1))
+            continue
+        fi
+        count=$((count + 1))
+        if [ -n "$timeout_sec" ]; then
+            timeout "${timeout_sec}" bash -c "$(declare -f do_run); $(declare -f get_instance); $(declare -f instance_to_image); CACHE_FILE='${CACHE_FILE}'; HF_DATASET='${HF_DATASET}'; WORKSPACE_DIR='${WORKSPACE_DIR}'; AGENTS_DIR='${AGENTS_DIR}'; OUTPUT_DIR='${OUTPUT_DIR}'; do_run '${agent}' '${instance_id}'" || echo "  TIMEOUT: ${instance_id}"
+        else
+            do_run "$agent" "$instance_id"
+        fi
     done < <(fetch_dataset | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 for inst in data:
     print(inst['instance_id'])
 ")
+    echo ""
+    echo "Done: ${count} run, ${skipped} skipped (resume)"
 }
 
 # ==============================================================================

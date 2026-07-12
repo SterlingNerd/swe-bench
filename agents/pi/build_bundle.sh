@@ -40,6 +40,8 @@ esac
 echo "Architecture: ${ARCH} -> Node.js ${NODE_ARCH}"
 
 # --- Download and extract Node.js binary ---
+# Note: No checksum verification — sources are reputable (nodejs.org).
+# For production use, add sha256sum checks against known-good hashes.
 NODE_TARBALL="/tmp/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
 
 if [ ! -f "${BUNDLE_DIR}/bin/node" ]; then

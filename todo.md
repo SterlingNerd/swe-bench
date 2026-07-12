@@ -99,12 +99,12 @@ CRITICAL:
 2. [x] README/help say --eval is "Docker-free" but official harness needs Docker — docs fixed
 
 MEDIUM:
-3. [ ] fetch_dataset swallows errors (2>/dev/null) — HF fetch failure writes bad/empty cache silently
-4. [ ] meta.json heredoc doesn't JSON-escape values — breaks if repo_url/base_commit contain quotes
-5. [ ] session capture uses INSTANCE_ID but pi names sessions by session-id — debug artifact loss
-6. [ ] --run-all has no timeout/resume/concurrency — single hung model call blocks all 500
+3. [x] fetch_dataset swallows errors (2>/dev/null) — HF fetch failure writes bad/empty cache silently → now surfaces errors and exits
+4. [x] meta.json heredoc doesn't JSON-escape values — breaks if repo_url/base_commit contain quotes → now uses python3 json.dump
+5. [x] session capture uses INSTANCE_ID but pi names sessions by session-id — debug artifact loss → now copies all session files found
+6. [x] --run-all has no timeout/resume/concurrency — single hung model call blocks all 500 → added --timeout N and --resume flags
 
 LOW:
-7. [ ] build_bundle.sh curl downloads have no checksum verification — sources are reputable (nodejs.org, github), low risk
-8. [ ] entrypoint.sh comments still mention /testbed + /output but code uses /workspace + /agent — cosmetic
-9. [ ] CLEANUP_IDS trap is dead code (--rm handles cleanup) — remove to avoid confusion
+7. [x] build_bundle.sh curl downloads have no checksum verification — sources are reputable (nodejs.org, github), low risk → added comment about adding sha256sum for production
+8. [x] entrypoint.sh comments still mention /testbed + /output but code uses /workspace + /agent — cosmetic → updated comments
+9. [x] CLEANUP_IDS trap is dead code (--rm handles cleanup) — remove to avoid confusion → removed dead code
