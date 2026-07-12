@@ -16,6 +16,7 @@
 #   ./run.sh --eval <agent>      Evaluate collected patches (Docker-free)
 #   ./run.sh --summarize [agent]  Combine and summarize collected results
 #   ./run.sh --status            Show completion status
+#   ./run.sh --interactive <id>  Drop into interactive shell in swebench image
 #
 # Workflow:
 #   1. ./run.sh --index          (one-time: cache the dataset)
@@ -161,6 +162,11 @@ COMMANDS
   --status
       Summarize progress of collected runs: totals plus per-instance status
       (resolved / failed / no patch / unknown) read from result.json files.
+
+  --interactive <INSTANCE_ID>
+      Drop into an interactive shell inside the swebench eval image for that
+      instance. Our agent bundle is mounted read-only at /agent. Useful for
+      debugging entrypoint.sh or testing pi manually inside the harness image.
 
 ENVIRONMENT
   SWE_WORKSPACE_DIR
@@ -606,6 +612,43 @@ do_status() {
 }
 
 # ==============================================================================
+# INTERACTIVE — drop into interactive shell in swebench eval image
+# ==============================================================================
+do_interactive() {
+    local instance_id="${1:?Usage: $0 --interactive <instance_id>}"
+
+    # Get instance data to determine repo for image name
+    local inst_data
+    inst_data=$(get_instance "$instance_id")
+
+    # Determine swebench image for this instance
+    local image_name
+    image_name=$(instance_to_image "$instance_id")
+
+    # Pull the image if not present
+    if ! docker image inspect "$image_name" >/dev/null 2>&1; then
+        echo "Pulling swebench image: ${image_name}..."
+        docker pull "$image_name" 2>&1 | tail -3
+    fi
+
+    echo "Starting interactive shell in ${image_name}..."
+    local DOCKER_RUN="docker run --rm -i"
+    [ -t 0 ] && DOCKER_RUN="$DOCKER_RUN -t"
+    $DOCKER_RUN \
+        --memory 8g \
+        --memory-swap 8g \
+        --pids-limit 500 \
+        --tmpfs /tmp:rw,noexec,nosuid,size=2g \
+        --cap-drop ALL \
+        --cap-add NET_RAW \
+        --security-opt no-new-privileges:true \
+        --add-host host.docker.internal:host-gateway \
+        -v "${WORKSPACE_DIR}:/workspace:rw" \
+        -v "${AGENTS_DIR}/pi/bundle:/agent:ro" \
+        "$image_name" bash
+}
+
+# ==============================================================================
 # MAIN
 # ==============================================================================
 if [ $# -eq 0 ]; then
@@ -643,6 +686,9 @@ case "$1" in
         ;;
     --status)
         do_status
+        ;;
+    --interactive|-i)
+        do_interactive "${2:-}"
         ;;
     *)
         echo "Unknown option: $1"
