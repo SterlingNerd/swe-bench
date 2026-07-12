@@ -135,7 +135,7 @@ outputs/<instance_id>/
 ├── agent_output.txt         # Raw stdout from agent
 ├── session.jsonl            # Full pi session (tool calls, responses)
 ├── patch.diff               # Git diff of all changes made (including new files)
-├── result.json              # {"status": "resolved|failed|no_patch", ...}
+├── result.json              # {"status": "resolved|failed|no_patch", "local_eval": "resolved|failed", ...}
 └── eval/                    # (created by --eval / swebench harness)
     └── reports/             # SWE-bench evaluation reports
 ```

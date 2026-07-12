@@ -417,7 +417,6 @@ do_run() {
         "https://github.com/${repo_url}" \
         "${base_commit}" \
         "${problem_statement}" || true
-    # --rm handles cleanup; CLEANUP_IDS trap is a safety net
 }
 
 # ==============================================================================
@@ -456,7 +455,34 @@ do_run_all() {
         fi
         count=$((count + 1))
         if [ -n "$timeout_sec" ]; then
-            timeout "${timeout_sec}" bash -c "$(declare -f do_run); $(declare -f get_instance); $(declare -f instance_to_image); CACHE_FILE='${CACHE_FILE}'; HF_DATASET='${HF_DATASET}'; WORKSPACE_DIR='${WORKSPACE_DIR}'; AGENTS_DIR='${AGENTS_DIR}'; OUTPUT_DIR='${OUTPUT_DIR}'; do_run '${agent}' '${instance_id}'" || echo "  TIMEOUT: ${instance_id}"
+            # Run detached with cidfile so timeout can kill the container
+            local cidfile="/tmp/swe_${agent}_${instance_id}.cid"
+            docker run --rm \
+                --name "swe_${agent}_${instance_id}" \
+                --memory 8g --memory-swap 16g --pids-limit 500 \
+                --tmpfs /tmp:rw,noexec,nosuid,size=2g \
+                --read-only \
+                --cap-drop ALL \
+                --security-opt no-new-privileges:true \
+                --add-host host.docker.internal:host-gateway \
+                -u 1001:1001 \
+                -v "${WORKSPACE_DIR}:/workspace:rw" \
+                -v "${AGENTS_DIR}/${agent}/bundle:/agent:ro" \
+                --cidfile "$cidfile" \
+                "$(instance_to_image "$instance_id")" \
+                /agent/entrypoint.sh \
+                "${instance_id}" \
+                "$(get_instance "$instance_id" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['repo'])")" \
+                "$(get_instance "$instance_id" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['base_commit'])")" \
+                "$(get_instance "$instance_id" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['problem_statement'])")" &
+            DOCKER_PID=$!
+            if ! timeout "${timeout_sec}" bash -c "wait $DOCKER_PID" 2>/dev/null; then
+                # Timeout expired — kill the container
+                local cid=$(cat "$cidfile" 2>/dev/null)
+                [ -n "$cid" ] && docker kill "$cid" 2>/dev/null || true
+                echo "  TIMEOUT: ${instance_id}"
+            fi
+            rm -f "$cidfile"
         else
             do_run "$agent" "$instance_id"
         fi
@@ -534,6 +560,30 @@ print(f'Wrote {len(results)} predictions to {os.environ[\"PREDS\"]}')
         --report_dir "${eval_dir}" \
         --run_id "${agent}" \
         "${instance_ids[@]}"
+
+    # Fold harness results back into each result.json
+    echo "Folding harness results into result.json..."
+    "${SWEBENCH_PY}" -c "
+import json, os, glob
+report_dir = os.environ['EVAL_DIR']
+# swebench writes all_preds.json with instance_id -> status mapping
+preds_file = os.path.join(report_dir, 'all_preds.json')
+if not os.path.exists(preds_file):
+    print('WARNING: all_preds.json not found, skipping fold')
+    exit(0)
+preds = json.load(open(preds_file))
+for iid, pred in preds.items():
+    result_file = os.path.join(report_dir, iid, 'result.json')
+    if not os.path.exists(result_file):
+        continue
+    meta = json.load(open(result_file))
+    # swebench verdict is in pred['resolved'] (bool)
+    resolved = pred.get('resolved', False)
+    meta['local_eval'] = 'resolved' if resolved else 'failed'
+    meta['status'] = 'resolved' if resolved else 'failed'
+    json.dump(meta, open(result_file, 'w'), indent=2)
+print(f'Folded results for {len(preds)} instances')
+" EVAL_DIR="${eval_dir}"
 }
 
 # ==============================================================================

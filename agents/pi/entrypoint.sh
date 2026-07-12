@@ -90,7 +90,8 @@ fi
 
 # cd into the repo — pi needs to run inside the codebase
 cd "$REPO_DIR" || { echo "ERROR: Cannot cd to $REPO_DIR"; exit 1; }
-git checkout "$BASE_COMMIT" || { echo "ERROR: Cannot checkout $BASE_COMMIT"; exit 1; }
+git reset --hard "$BASE_COMMIT" || { echo "ERROR: Cannot reset to $BASE_COMMIT"; exit 1; }
+git clean -fdx || true  # remove any leftover files from prior runs
 
 # Run the agent using the bundled pi CLI (from inside the repo)
 echo "  Running agent in $REPO_DIR..."

@@ -92,19 +92,9 @@ S5. [x] Pin pi-coding-agent version in build_bundle.sh (not @latest)
 S6. [x] Remove Dockerfile.pi and .dockerignore
 
 ────────────────────────────────────────────────────────────────────────────────
-### THIRD REVIEW FINDINGS (fix these)
+### FOURTH REVIEW FINDINGS (fix these)
 
-CRITICAL:
-1. [x] do_run missing closing brace `}` — syntax error, fixed
-2. [x] README/help say --eval is "Docker-free" but official harness needs Docker — docs fixed
-
-MEDIUM:
-3. [x] fetch_dataset swallows errors (2>/dev/null) — HF fetch failure writes bad/empty cache silently → now surfaces errors and exits
-4. [x] meta.json heredoc doesn't JSON-escape values — breaks if repo_url/base_commit contain quotes → now uses python3 json.dump
-5. [x] session capture uses INSTANCE_ID but pi names sessions by session-id — debug artifact loss → now copies all session files found
-6. [x] --run-all has no timeout/resume/concurrency — single hung model call blocks all 500 → added --timeout N and --resume flags
-
-LOW:
-7. [x] build_bundle.sh curl downloads have no checksum verification — sources are reputable (nodejs.org, github), low risk → added comment about adding sha256sum for production
-8. [x] entrypoint.sh comments still mention /testbed + /output but code uses /workspace + /agent — cosmetic → updated comments
-9. [x] CLEANUP_IDS trap is dead code (--rm handles cleanup) — remove to avoid confusion → removed dead code
+A. [x] --eval → --summarize disconnect — do_eval now folds harness report into result.json (local_eval populated)
+B. [x] --run-all --timeout doesn't stop containers — now uses docker run -d --cidfile + timeout + docker kill
+C. [x] Stale working tree leaks into patch — added git reset --hard && git clean -fdx before running pi
+D. [x] Stale comment at run.sh:420 and README inaccuracy — cleaned up
