@@ -61,7 +61,7 @@ and skips nothing. A SCOPE argument controls what is rebuilt:
 ./run.sh --run pi django__django-11039
 ```
 
-Clones the repo, runs Pi headlessly, and extracts the patch. Results persist in `outputs/django__django-11039/`. Run `./run.sh --eval pi` separately to evaluate.
+Clones the repo, runs Pi headlessly, and extracts the patch. Results persist in `outputs/django__django-11039/`. Evaluate afterward with `./run.sh --eval pi` (full swebench harness) or `./run.sh --eval-local pi` (lightweight, no eval images required — see below).
 
 ### 4. Run against all instances
 
@@ -70,6 +70,27 @@ Clones the repo, runs Pi headlessly, and extracts the patch. Results persist in 
 ```
 
 Iterates through all 500 verified instances sequentially.
+
+### 4b. Evaluate collected patches
+
+```bash
+./run.sh --eval pi          # full swebench harness (needs pullable eval images)
+./run.sh --eval-local pi    # lightweight functional check (no eval images)
+./run.sh --summarize pi     # combine results -> outputs/summary.json
+```
+
+**Evaluation images:** `--eval` runs the official swebench harness, which
+builds/runs per-instance test containers from prebuilt images named
+`swebench/sweb.eval.x86_64.<instance_id>:latest`. Those images must be
+**pullable from a registry** in your environment, or `--eval` will fail at the
+image-pull step (this is an environment precondition, not a code issue).
+
+`--eval-local` is a fallback that does **not** require those images: for each
+collected patch it clones the repo at the base commit, applies the model patch
++ the dataset's `test_patch`, installs the package in a pyenv venv, and runs the
+instance's `FAIL_TO_PASS` / `PASS_TO_PASS` tests with pytest. It is slower
+(it bootstraps each project) but works wherever the project's dependencies can
+be installed.
 
 ### 5. Check status
 
@@ -100,7 +121,8 @@ The entrypoint script is generic — any agent container (pi, codex, claude) can
 2. Clones repo at correct commit
 3. Runs the agent command (`pi -p` for Pi)
 4. Extracts patch via `git diff`
-5. Evaluates using swebench harness
+5. Optionally evaluates using the swebench harness (`--eval`) or a lightweight
+   local check (`--eval-local`)
 6. Saves results to `outputs/<instance_id>/`
 
 ### Output structure

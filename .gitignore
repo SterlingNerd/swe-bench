@@ -1,0 +1,9 @@
+# Runtime artifacts produced by ./run.sh (patches, cloned repos, agent logs, eval logs)
+workspace/
+
+# Local logs
+*.log
+
+# OS / editor noise
+.DS_Store
+*.swp

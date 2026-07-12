@@ -10,7 +10,9 @@
 #   ./run.sh --rebuild [scope] Rebuild from scratch (--no-cache): all|base|<agent>
 #   ./run.sh --run <agent> <id>  Run an agent against a specific instance
 #   ./run.sh --run-all <agent>   Run agent against all 500 instances
-#   ./run.sh --eval <agent>      Evaluate collected patches for an agent
+#   ./run.sh --eval <agent>      Evaluate collected patches for an agent (swebench harness)
+#   ./run.sh --eval-local <agent> Lightweight functional verification (no eval images)
+#   ./run.sh --summarize [agent]  Combine and summarize collected results
 #   ./run.sh --interactive       Start interactive container for manual debugging
 #
 # Workflow:
@@ -147,7 +149,23 @@ COMMANDS
       Evaluate the patches collected for AGENT in a previous --run/--run-all.
       Builds predictions.json from the collected patch.diff files and runs the
       swebench evaluation harness (which spins up its own test containers).
-      Writes per-instance result.json (resolved/failed/no_patch) and eval.log.
+      Requires the prebuilt eval images (swebench/sweb.eval.*) to be pullable
+      from a registry — that is an environment precondition, not a code issue.
+      Writes per-instance result.json (resolved/failed) and eval.log.
+
+  --eval-local <AGENT>
+      Lightweight functional verification that does NOT need the prebuilt
+      swebench eval images. For each collected patch it clones the repo at the
+      base commit, applies the model patch + the dataset's test_patch, installs
+      the package in a pyenv venv, and runs the instance's FAIL_TO_PASS and
+      PASS_TO_PASS tests with pytest. Writes local_eval.json and folds the
+      result into result.json. Useful when the harness eval images are
+      unavailable. Can be slow (compiles/bootstraps each project).
+
+  --summarize [AGENT]
+      Combine and summarize all collected results into outputs/summary.json and
+      print a table (status / local_eval / patch size). Optional AGENT filter
+      matches instance ids prefixed with '<agent>__'.
 
   --status
       Summarize progress of collected runs: totals plus per-instance status
@@ -463,12 +481,12 @@ do_eval() {
     fi
 
     echo "=============================================================================="
-    echo "Evaluating ${#instance_ids[@]} patch(es) for '${agent}'"
+    echo "Evaluating ${#instance_ids[@]} patch(es) for '${agent}' (swebench harness)"
     echo "=============================================================================="
 
-    # Build predictions.json from all collected patches
-    local tmp_preds=$(mktemp)
-    EVAL_DIR="${eval_dir}" AGENT_NAME="${agent}" TMP_PREDS="${tmp_preds}" python3 -c "
+    # Build predictions.json from all collected patches (persist in workspace)
+    local preds="${eval_dir}/predictions.json"
+    EVAL_DIR="${eval_dir}" AGENT_NAME="${agent}" PREDS="${preds}" python3 -c "
 import sys, json, os
 results = []
 for instance_id in sys.argv[1:]:
@@ -482,61 +500,184 @@ for instance_id in sys.argv[1:]:
         'model_name_or_path': os.environ['AGENT_NAME'],
         'model_patch': patch
     })
-with open(os.environ['TMP_PREDS'], 'w') as f:
+with open(os.environ['PREDS'], 'w') as f:
     json.dump(results, f)
 print(f'Collected {len(results)} patches')
 " "${instance_ids[@]}"
 
-    # Run evaluation directly on the host (swebench harness creates its own
-    # test containers as needed — no need to wrap in another container).
-    local results_dir="${eval_dir}/results"
-    python3 -m swebench.harness.run_evaluation \
-        --dataset_name princeton-nlp/SWE-bench_Verified \
-        --predictions_path "$tmp_preds" \
-        --max_workers 1 \
-        --namespace '' \
-        --output_dir "$results_dir" \
+    # Run the swebench harness INSIDE the swe-base image (which bundles
+    # swebench 4.1.0 + the docker CLI). The host Docker socket is mounted so
+    # the harness can build/run its own test containers. NOTE: this requires
+    # the prebuilt eval images (swebench/sweb.eval.*) to be pullable from a
+    # registry; that is an environment precondition, not a code issue.
+    local run_id="swe-${agent}-$(date +%Y%m%d-%H%M%S)"
+    echo "run_id=${run_id}"
+    docker run --rm --user root \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v "${WORKSPACE_DIR}:/home/agent/workspace:rw" \
+        -w /home/agent/workspace \
+        swe-base \
+        /usr/local/bin/python3 -m swebench.harness.run_evaluation \
+            -d princeton-nlp/SWE-bench_Verified \
+            -p /home/agent/workspace/outputs/predictions.json \
+            -i "${instance_ids[@]}" \
+            --run_id "${run_id}" \
+            --namespace swebench \
+            --max_workers 1 \
+            --report_dir /home/agent/workspace/outputs/eval \
         2>&1 | tee "${eval_dir}/eval.log"
 
-    rm -f "$tmp_preds"
+    # Parse per-instance report.json written by the harness under
+    # logs/run_evaluation/<run_id>/<agent>/<instance_id>/report.json
+    local log_root="${WORKSPACE_DIR}/logs/run_evaluation/${run_id}/${agent}"
+    for iid in "${instance_ids[@]}"; do
+        local rep="${log_root}/${iid}/report.json"
+        if [ -f "$rep" ]; then
+            local resolved
+            resolved=$(python3 -c "import json;print(json.load(open('$rep')).get('resolved'))" 2>/dev/null)
+            local st="failed"
+            [ "$resolved" = "True" ] && st="resolved"
+            local rp="${eval_dir}/${iid}/result.json"
+            if [ -f "$rp" ]; then
+                OUT="$rp" ST="$st" python3 -c "
+import json, os
+rp=os.environ['OUT']; st=os.environ['ST']
+m=json.load(open(rp)); m['status']=st; m['harness_eval']=st
+json.dump(m, open(rp,'w'), indent=2)
+print(f'  Updated {os.path.basename(os.path.dirname(rp))}: {st}')
+"
+            fi
+        else
+            echo "  (no harness report for ${iid} — see eval.log)"
+        fi
+    done
+}
 
-    # Update result.json for each instance with actual eval status
-    if [ -d "$results_dir" ]; then
-        RESULTS_DIR="${results_dir}" OUTPUT_DIR="${eval_dir}" python3 -c "
-import json, os, glob
-
-results_dir = os.environ['RESULTS_DIR']
-output_dir  = os.environ['OUTPUT_DIR']
-
-# swebench writes per-instance results as JSONL in results/<dataset>/test_results.jsonl
-for test_file in glob.glob(os.path.join(results_dir, '*', 'test_results.jsonl')):
-    with open(test_file) as f:
-        for line in f:
-            entry = json.loads(line)
-            iid   = entry.get('instance_id')
-            if not iid:
-                continue
-            result_path = os.path.join(output_dir, iid, 'result.json')
-            if not os.path.exists(result_path):
-                continue
-            # Determine status from the test results
-            logs_to_analyze = entry.get('logs_to_analyze', [])
-            test_results    = entry.get('test_results', {})
-            resolved        = test_results.get('resolved', False)
-            if resolved:
-                status = 'resolved'
-            elif logs_to_analyze:
-                status = 'failed'
-            else:
-                status = 'failed'  # no logs means it didn't pass
-            with open(result_path) as f:
-                meta = json.load(f)
-            meta['status'] = status
-            with open(result_path, 'w') as f:
-                json.dump(meta, f, indent=2)
-            print(f'  Updated {iid}: {status}')
-" 2>/dev/null || echo "  (Could not parse eval results — check eval.log)"
+# ==============================================================================
+# EVAL-LOCAL — lightweight functional verification of collected patches
+# (does NOT require the prebuilt swebench eval images)
+# ==============================================================================
+do_eval_local() {
+    local agent="${1:?Usage: $0 --eval-local <agent>}"
+    if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
+        echo "ERROR: Agent '${agent}' not found. Available agents:"
+        for d in "${AGENTS_DIR}"/*/; do
+            [ -d "$d" ] && echo "  $(basename "$d")"
+        done
+        exit 1
     fi
+
+    local eval_dir="${OUTPUT_DIR}"
+    [ -d "$eval_dir" ] || { echo "No outputs found. Run instances first."; return; }
+
+    local instance_ids=()
+    for d in "${eval_dir}"/*/; do
+        [ -d "$d" ] && [ -f "${d}patch.diff" ] && instance_ids+=("$(basename "$d")")
+    done
+    [ ${#instance_ids[@]} -eq 0 ] && { echo "No patches found to evaluate."; return; }
+
+    echo "=============================================================================="
+    echo "Local (lightweight) eval for ${#instance_ids[@]} patch(es)"
+    echo "=============================================================================="
+
+    if [ ! -f "${REPO_ROOT}/eval_local_worker.py" ]; then
+        echo "ERROR: eval_local_worker.py not found at ${REPO_ROOT}/eval_local_worker.py"
+        exit 1
+    fi
+
+    for iid in "${instance_ids[@]}"; do
+        local out_dir="${eval_dir}/${iid}"
+        echo "--- ${iid} ---"
+        # Prepare eval_local_input.json from the dataset (host python)
+        INSTANCE_ID="$iid" CACHE_FILE="$CACHE_FILE" OUT_DIR="$out_dir" python3 - <<'PY'
+import json, os
+iid=os.environ['INSTANCE_ID']; cache=os.environ['CACHE_FILE']; out=os.environ['OUT_DIR']
+data=json.load(open(cache))
+inst=next((i for i in data if i['instance_id']==iid), None)
+assert inst, "instance not found: "+iid
+inp={
+  "instance_id": iid,
+  "repo": inst["repo"],
+  "base_commit": inst["base_commit"],
+  "test_patch": inst.get("test_patch",""),
+  "FAIL_TO_PASS": json.loads(inst.get("FAIL_TO_PASS","[]") or "[]"),
+  "PASS_TO_PASS": json.loads(inst.get("PASS_TO_PASS","[]") or "[]"),
+}
+json.dump(inp, open(os.path.join(out,"eval_local_input.json"),"w"), indent=2)
+print("prepared", iid)
+PY
+        # Run the worker inside swe-base (root so it can write into the workspace).
+        # NOTE: the workspace is mounted at /home/agent/workspace inside the
+        # container, so we pass the container path, not the host path.
+        docker run --rm --user root \
+            -v "${WORKSPACE_DIR}:/home/agent/workspace:rw" \
+            -v "${REPO_ROOT}/eval_local_worker.py:/eval_local_worker.py:ro" \
+            swe-base /usr/local/bin/python3 /eval_local_worker.py "/home/agent/workspace/outputs/${iid}"
+
+        # Fold the local result into result.json
+        if [ -f "$out_dir/local_eval.json" ]; then
+            OUT_DIR="$out_dir" python3 - <<'PY'
+import json, os
+out=os.environ['OUT_DIR']
+le=json.load(open(os.path.join(out,'local_eval.json')))
+rp=os.path.join(out,'result.json')
+meta=json.load(open(rp)) if os.path.exists(rp) else {}
+meta['local_eval']=le['status']
+meta['local_eval_detail']={'install_ok':le.get('install_ok'),
+                           'model_patch_applied':le.get('model_patch_applied'),
+                           'tests':le.get('tests')}
+json.dump(meta, open(rp,'w'), indent=2)
+print("updated", os.path.basename(out), "->", le['status'])
+PY
+        fi
+    done
+}
+
+# ==============================================================================
+# SUMMARIZE — combine and summarize all collected results
+# ==============================================================================
+do_summarize() {
+    local agent="${1:-}"
+    local eval_dir="${OUTPUT_DIR}"
+    [ -d "$eval_dir" ] || { echo "No outputs found."; return; }
+    local out_json="${eval_dir}/summary.json"
+    AGENT="${agent}" EVAL_DIR="${eval_dir}" OUT_JSON="${out_json}" python3 - <<'PY'
+import json, os, glob
+agent=(os.environ.get('AGENT') or '').strip().lower()
+eval_dir=os.environ['EVAL_DIR']; out_json=os.environ['OUT_JSON']
+rows=[]
+for d in sorted(glob.glob(os.path.join(eval_dir,'*',''))):
+    iid=os.path.basename(d.rstrip('/'))
+    if not iid: continue
+    rp=os.path.join(d,'result.json')
+    if not os.path.exists(rp): continue
+    # NOTE: outputs are keyed by instance id (repo-prefixed), not by agent, so
+    # the optional AGENT argument is accepted for compatibility but does not
+    # filter rows here.
+    meta=json.load(open(rp))
+    rows.append({
+      'instance_id': iid,
+      'status': meta.get('status'),
+      'patch_bytes': meta.get('patch_bytes'),
+      'elapsed_seconds': meta.get('elapsed_seconds'),
+      'local_eval': meta.get('local_eval'),
+    })
+total=len(rows)
+resolved=sum(1 for r in rows if r['status']=='resolved')
+failed=sum(1 for r in rows if r['status']=='failed')
+no_patch=sum(1 for r in rows if r['status']=='no_patch')
+local_resolved=sum(1 for r in rows if r['local_eval']=='resolved')
+local_failed=sum(1 for r in rows if r['local_eval']=='failed')
+summary={'agent_filter':agent or None,'total':total,
+         'status_resolved':resolved,'status_failed':failed,'status_no_patch':no_patch,
+         'local_eval_resolved':local_resolved,'local_eval_failed':local_failed,'rows':rows}
+json.dump(summary, open(out_json,'w'), indent=2)
+print(f"{'instance_id':42s} {'status':12s} {'local_eval':12s} {'patch_B':>8s}")
+for r in rows:
+    print(f"{r['instance_id']:42s} {str(r['status']):12s} {str(r['local_eval']):12s} {str(r['patch_bytes'] or 0):>8s}")
+print(f"\nTotal: {total} | harness-resolved: {resolved} | local-resolved: {local_resolved} | local-failed: {local_failed} | no_patch: {no_patch}")
+print(f"Summary written to {out_json}")
+PY
 }
 
 # ==============================================================================
@@ -639,6 +780,12 @@ case "$1" in
         ;;
     --eval)
         do_eval "${2:-}"
+        ;;
+    --eval-local)
+        do_eval_local "${2:-}"
+        ;;
+    --summarize)
+        do_summarize "${2:-}"
         ;;
     --status)
         do_status
