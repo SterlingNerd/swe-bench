@@ -92,20 +92,19 @@ S5. [x] Pin pi-coding-agent version in build_bundle.sh (not @latest)
 S6. [x] Remove Dockerfile.pi and .dockerignore
 
 ────────────────────────────────────────────────────────────────────────────────
-### NEW ISSUES FROM SECOND REVIEW
+### THIRD REVIEW FINDINGS (fix these)
 
 CRITICAL:
-1. [x] git diff drops new/untracked files — fixed: git add -A && git diff --cached
-2. [ ] --eval doesn't match README ("Docker-free" vs actual harness) — README updated to match code
-3. [ ] Unreproducible result folding — eval_local_worker.py orphaned, need to decide path
+1. [x] do_run missing closing brace `}` — syntax error, fixed
+2. [x] README/help say --eval is "Docker-free" but official harness needs Docker — docs fixed
 
 MEDIUM:
-4. [x] CONTAINER_ID capture bug — removed broken cleanup mechanism, --rm handles it
-5. [ ] --run-all over 500 instances pulls eval image per instance — document in README
-6. [ ] eval_local_worker.py Django branch is coarse — acceptable for benchmark
-7. [ ] session capture likely never copies (pi names by session-id, not instance-id)
+3. [ ] fetch_dataset swallows errors (2>/dev/null) — HF fetch failure writes bad/empty cache silently
+4. [ ] meta.json heredoc doesn't JSON-escape values — breaks if repo_url/base_commit contain quotes
+5. [ ] session capture uses INSTANCE_ID but pi names sessions by session-id — debug artifact loss
+6. [ ] --run-all has no timeout/resume/concurrency — single hung model call blocks all 500
 
 LOW:
-8. [x] todo.md stale — updated to reflect reality
-9. [x] README drift — rewritten to match current code
-10. [ ] build_bundle.sh rm -rf comment — low priority
+7. [ ] build_bundle.sh curl downloads have no checksum verification — sources are reputable (nodejs.org, github), low risk
+8. [ ] entrypoint.sh comments still mention /testbed + /output but code uses /workspace + /agent — cosmetic
+9. [ ] CLEANUP_IDS trap is dead code (--rm handles cleanup) — remove to avoid confusion

@@ -80,7 +80,7 @@ Iterates through all 500 verified instances sequentially.
 ```
 
 The `--eval` step uses the **official SWE-bench harness** (`swebench.harness.run_evaluation`).
-It requires Docker (pulls eval images per instance) and network access.
+It requires Docker (pulls eval images per instance) and network access. This is NOT Docker-free.
 
 For each collected patch, the harness:
 1. Pulls the swebench eval image for that instance

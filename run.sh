@@ -13,7 +13,7 @@
 #   ./run.sh --rebuild [scope] Rebuild from scratch (--no-cache): all|<agent>
 #   ./run.sh --run <agent> <id>  Run an agent against a specific instance
 #   ./run.sh --run-all <agent>   Run agent against all 500 instances
-#   ./run.sh --eval <agent>      Evaluate collected patches (Docker-free)
+#   ./run.sh --eval <agent>      Evaluate collected patches (official swebench harness)
 #   ./run.sh --summarize [agent]  Combine and summarize collected results
 #   ./run.sh --status            Show completion status
 #   ./run.sh --interactive <id>  Drop into interactive shell in swebench image
@@ -23,8 +23,9 @@
 #   1. ./run.sh --index          (one-time: cache the dataset)
 #   2. ./run.sh --build          (build agent bundles — no Docker images)
 #   3. ./run.sh --run <agent> <id>  (spins up swebench image, mounts our bundle)
-#   4. ./run.sh --eval <agent>   (evaluate collected patches, Docker-free)
-#   5. ./run.sh --status         (inspect results)
+#   4. ./run.sh --init           (install swebench harness — one-time)
+#   5. ./run.sh --eval <agent>   (evaluate collected patches via official harness)
+#   6. ./run.sh --status         (inspect results)
 # ==============================================================================
 
 set -euo pipefail
@@ -153,14 +154,10 @@ COMMANDS
       Long-running: consider running in the background.
 
   --eval <AGENT>
-      Evaluate the patches collected for AGENT in a previous run.
-      This is a SEPARATE step from the agent "work" step and needs NO Docker
-      access. Following the SWE-bench quickstart methodology, for each patch it
-      clones the repo at the base commit, applies the model patch + the
-      dataset's test_patch, installs the project in a venv, and runs the
-      instance's FAIL_TO_PASS and PASS_TO_PASS tests (Django uses
-      tests/runtests.py; other repos use pytest). Writes local_eval.json and
-      folds the result into result.json. Can be slow (bootstraps each project).
+      Evaluate the patches collected for AGENT in a previous run using the
+      official swebench harness. Requires Docker (pulls eval images per
+      instance) and network access. Run './run.sh --init' first to install
+      the swebench Python package.
 
   --summarize [AGENT]
       Combine and summarize all collected results into outputs/summary.json and
@@ -424,6 +421,7 @@ do_run() {
         "${base_commit}" \
         "${problem_statement}" || true
     # --rm handles cleanup; CLEANUP_IDS trap is a safety net
+}
 
 # ==============================================================================
 # RUN-ALL — run agent against all instances
