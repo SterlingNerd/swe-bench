@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="${1:-${SCRIPT_DIR}/bundle}"
-NODE_VERSION="20.18.1"
+NODE_VERSION="22.14.0"
 
 echo "=== Building pi agent bundle ==="
 echo "Output: ${BUNDLE_DIR}"
@@ -36,12 +36,10 @@ esac
 
 echo "Architecture: ${ARCH} -> Node.js ${NODE_ARCH}"
 
-# --- Download Node.js binary ---
-NODE_DIR="${BUNDLE_DIR}/node"
-mkdir -p "${NODE_DIR}"
+# --- Download and extract Node.js binary ---
 NODE_TARBALL="/tmp/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
 
-if [ ! -f "${NODE_DIR}/bin/node" ]; then
+if [ ! -f "${BUNDLE_DIR}/bin/node" ]; then
     echo "Downloading Node.js ${NODE_VERSION} for ${NODE_ARCH}..."
     curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
         -o "${NODE_TARBALL}" 2>/dev/null || {
@@ -53,15 +51,16 @@ if [ ! -f "${NODE_DIR}/bin/node" ]; then
                 exit 1
             fi
         }
-    tar -xf "${NODE_TARBALL}" -C "${BUNDLE_DIR}" --strip-components=1 2>/dev/null || \
-        tar -xJf "${NODE_TARBALL}" -C "${BUNDLE_DIR}" --strip-components=1 2>/dev/null || {
+    # Extract with --strip-components=1 to put files directly in BUNDLE_DIR
+    tar -xJf "${NODE_TARBALL}" -C "${BUNDLE_DIR}" --strip-components=1 2>/dev/null || \
+        tar -xf "${NODE_TARBALL}" -C "${BUNDLE_DIR}" --strip-components=1 2>/dev/null || {
             # Try gzip fallback
             gunzip -c "${NODE_TARBALL}" | tar -xf - -C "${BUNDLE_DIR}" --strip-components=1
         }
     rm -f "${NODE_TARBALL}"
 fi
 
-export PATH="${NODE_DIR}/bin:${PATH}"
+export PATH="${BUNDLE_DIR}/bin:${PATH}"
 echo "Node.js: $(node --version)"
 echo "npm: $(npm --version)"
 
@@ -71,12 +70,13 @@ cd "${BUNDLE_DIR}"
 npm install --ignore-scripts "@earendil-works/pi-coding-agent@latest" 2>&1 | tail -3
 
 # Create a wrapper script for pi that uses the bundled node
-cat > "${NODE_DIR}/bin/pi" <<'WRAPPER'
+# Note: node_modules is at BUNDLE_DIR level, not bin/ level
+cat > "${BUNDLE_DIR}/bin/pi" <<WRAPPER
 #!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "${SCRIPT_DIR}/node" "${SCRIPT_DIR}/node_modules/@earendil-works/pi-coding-agent/bin/pi.js" "$@"
+SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/../" && pwd)"
+exec "\${SCRIPT_DIR}/bin/node" "\${SCRIPT_DIR}/node_modules/@earendil-works/pi-coding-agent/dist/cli.js" "\$@"
 WRAPPER
-chmod +x "${NODE_DIR}/bin/pi"
+chmod +x "${BUNDLE_DIR}/bin/pi"
 
 # --- Copy config files ---
 echo "Copying config files..."
@@ -109,8 +109,8 @@ echo ""
 echo "=== Bundle contents ==="
 du -sh "${BUNDLE_DIR}" 2>/dev/null || true
 echo ""
-echo "Node.js: $(ls ${NODE_DIR}/bin/node 2>/dev/null && echo 'OK' || echo 'MISSING')"
-echo "pi CLI:  $(ls ${NODE_DIR}/bin/pi 2>/dev/null && echo 'OK' || echo 'MISSING')"
+echo "Node.js: $(ls ${BUNDLE_DIR}/bin/node 2>/dev/null && echo 'OK' || echo 'MISSING')"
+echo "pi CLI:  $(ls ${BUNDLE_DIR}/bin/pi 2>/dev/null && echo 'OK' || echo 'MISSING')"
 echo "settings: $(ls ${AGENT_DIR}/settings.json 2>/dev/null && echo 'OK' || echo 'MISSING')"
 echo "models:   $(ls ${AGENT_DIR}/models.json 2>/dev/null && echo 'OK' || echo 'MISSING')"
 echo "auth:     $(ls ${AGENT_DIR}/auth.json 2>/dev/null && echo 'OK' || echo 'MISSING')"

@@ -1,6 +1,9 @@
 # Runtime artifacts produced by ./run.sh (patches, cloned repos, agent logs, eval logs)
 workspace/
 
+# Agent bundles (self-contained, built at runtime)
+agents/*/bundle/
+
 # Local logs
 *.log
 
