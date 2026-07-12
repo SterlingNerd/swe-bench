@@ -1,9 +1,9 @@
 #!/bin/bash
 # ==============================================================================
-# SWE-bench Orchestrator — unified build, index, list, and run
+# SWE-bench Orchestrator — unified build, index, list, run, and eval
 #
-# Architecture: Self-contained agent bundles mounted into swebench harness images.
-# We do NOT build Docker images — the swebench harness provides the container runtime.
+# Architecture: Self-contained agent bundles mounted into swebench eval images.
+# Each instance has a pre-built swebench image; we mount our bundle inside it.
 #
 # Usage:
 #   ./run.sh --help              Show this help
@@ -11,19 +11,29 @@
 #   ./run.sh --list [filter]     List problems (optional grep filter)
 #   ./run.sh --build [agent]     Build agent bundle(s) only
 #   ./run.sh --rebuild [scope] Rebuild from scratch (--no-cache): all|<agent>
-#   ./run.sh --eval <agent>      Evaluate collected patches (Docker-free, quickstart-style)
+#   ./run.sh --run <agent> <id>  Run an agent against a specific instance
+#   ./run.sh --run-all <agent>   Run agent against all 500 instances
+#   ./run.sh --eval <agent>      Evaluate collected patches (Docker-free)
 #   ./run.sh --summarize [agent]  Combine and summarize collected results
 #   ./run.sh --status            Show completion status
 #
 # Workflow:
 #   1. ./run.sh --index          (one-time: cache the dataset)
 #   2. ./run.sh --build          (build agent bundles — no Docker images)
-#   3. Harness runs agents using its own images, mounting our bundle at /agent
+#   3. ./run.sh --run <agent> <id>  (spins up swebench image, mounts our bundle)
 #   4. ./run.sh --eval <agent>   (evaluate collected patches, Docker-free)
 #   5. ./run.sh --status         (inspect results)
 # ==============================================================================
 
 set -euo pipefail
+
+# ==============================================================================
+# CLEANUP — remove any containers this script created on exit
+# ==============================================================================
+cleanup() {
+    docker rm -f "$(docker ps -aq --filter 'name=swe_' 2>/dev/null)" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 # ==============================================================================
 # CONFIGURATION
@@ -35,6 +45,9 @@ OUTPUT_DIR="${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}/outputs"
 WORKSPACE_DIR="${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}"
 CACHE_FILE="/tmp/swe_verified_cache.json"
 HF_DATASET="princeton-nlp/SWE-bench_Verified"
+
+# SWE-bench image registry
+SWEBENCH_REGISTRY="swebench"
 
 # ==============================================================================
 # DATASET — fetch and cache from HuggingFace
@@ -87,7 +100,7 @@ sys.exit(1)
 show_help() {
     cat <<EOF
 $(basename "$0") — SWE-bench Orchestrator
-Self-contained agent bundles mounted into swebench harness images.
+Self-contained agent bundles mounted into swebench eval images.
 
 USAGE
   $(basename "$0") [COMMAND] [ARGS]
@@ -118,6 +131,18 @@ COMMANDS
         <agent>     only that agent bundle
       Use this to upgrade pi or refresh cached layers. Skips nothing.
 
+  --run <AGENT> <INSTANCE_ID>
+      Run an agent against a single instance. AGENT is a folder name under
+      agents/ (e.g. pi, codex). INSTANCE_ID is like django__django-11039.
+      Spins up the swebench eval image for that instance, mounts our agent
+      bundle read-only at /agent, and calls entrypoint.sh inside it.
+      Results are written to <workspace>/outputs/<INSTANCE_ID>/.
+
+  --run-all <AGENT>
+      Run an agent against every cached instance (all 500 verified instances),
+      collecting one patch per instance to <workspace>/outputs/<INSTANCE_ID>/.
+      Long-running: consider running in the background.
+
   --eval <AGENT>
       Evaluate the patches collected for AGENT in a previous run.
       This is a SEPARATE step from the agent "work" step and needs NO Docker
@@ -143,8 +168,9 @@ ENVIRONMENT
       derived from it: outputs = \$workspace/outputs
 
 PREREQUISITES
+  - Docker must be installed and running (used for --run, --run-all, and the
+    dataset fetch behind --index/--list).
   - A HuggingFace dataset fetch happens on first --index / --list.
-  - The swebench harness provides the container runtime for running agents.
 
 EXAMPLES
   $(basename "$0") --index
@@ -152,6 +178,8 @@ EXAMPLES
   $(basename "$0") --build
   $(basename "$0") --rebuild           # force fresh build of all bundles (latest pi CLI)
   $(basename "$0") --rebuild pi        # rebuild only the 'pi' agent bundle
+  $(basename "$0") --run pi django__django-11039
+  $(basename "$0") --run-all pi
   $(basename "$0") --eval pi
   $(basename "$0") --status
 EOF
@@ -201,7 +229,6 @@ do_build() {
 
     echo "=== Building Agent Bundles (no Docker images) ==="
 
-    # Build agent bundles
     for agent_dir in "${AGENTS_DIR}"/*/; do
         [ -d "$agent_dir" ] || continue
         agent_name=$(basename "$agent_dir")
@@ -231,10 +258,7 @@ do_build() {
 }
 
 # ==============================================================================
-# REBUILD — always from scratch (--no-cache), scope-controlled by arg:
-#   --rebuild           -> all agent bundles (default: 'all')
-#   --rebuild all       -> all agent bundles
-#   --rebuild <agent>   -> only that agent bundle
+# REBUILD — always from scratch (--no-cache)
 # ==============================================================================
 build_agent_bundle() {
     local agent_dir="$1"
@@ -284,6 +308,125 @@ do_rebuild() {
             echo "  ${agent_name} bundle: $(du -sh "${agent_dir}/bundle" 2>/dev/null | cut -f1)"
         fi
     done
+}
+
+# ==============================================================================
+# SWE-BENCH IMAGE HELPERS
+# ==============================================================================
+get_arch() {
+    uname -m | sed 's/x86_64/x86_64/; s/aarch64/arm64/'
+}
+
+# Convert instance_id to swebench image name
+# django__django-11039 -> swebench/sweb.eval.x86_64.django_1776_django-11039:latest
+instance_to_image() {
+    local instance_id="$1"
+    local arch
+    arch=$(get_arch)
+
+    # Extract repo and issue from instance_id
+    # Format: repo__repo-issue  (e.g. django__django-11039)
+    local repo_part="${instance_id%%__*}"
+    local issue_part="${instance_id#*__}"
+
+    # Convert repo slashes to underscores for image name
+    local repo_image_name
+    repo_image_name=$(echo "$repo_part" | sed 's|/|_|g')
+
+    echo "${SWEBENCH_REGISTRY}/sweb.eval.${arch}.${repo_image_name}_1776_${issue_part}:latest"
+}
+
+# ==============================================================================
+# RUN — run an agent against a specific instance
+#
+# Spins up the swebench eval image for this instance, mounts our agent bundle
+# read-only at /agent, and calls entrypoint.sh inside it.
+# ==============================================================================
+do_run() {
+    local agent="${1:?Usage: $0 --run <agent> <instance_id>}"
+    local instance_id="${2:?Usage: $0 --run <agent> <instance_id>}"
+
+    # Validate agent exists
+    if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
+        echo "ERROR: Agent '${agent}' not found. Available agents:"
+        for d in "${AGENTS_DIR}"/*/; do
+            [ -d "$d" ] && echo "  $(basename "$d")"
+        done
+        exit 1
+    fi
+
+    # Validate agent bundle exists
+    local bundle_dir="${AGENTS_DIR}/${agent}/bundle"
+    if [ ! -d "$bundle_dir" ]; then
+        echo "ERROR: Agent bundle not found at ${bundle_dir}. Run './run.sh --build ${agent}' first."
+        exit 1
+    fi
+
+    # Get instance data
+    local inst_data
+    inst_data=$(get_instance "$instance_id")
+    local repo_url base_commit problem_statement
+    repo_url=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['repo'])")
+    base_commit=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['base_commit'])")
+    problem_statement=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['problem_statement'])")
+
+    # Determine swebench image for this instance
+    local image_name
+    image_name=$(instance_to_image "$instance_id")
+
+    # Pull the image if not present
+    if ! docker image inspect "$image_name" >/dev/null 2>&1; then
+        echo "Pulling swebench image: ${image_name}..."
+        docker pull "$image_name" 2>&1 | tail -3
+    fi
+
+    # Run the agent container
+    echo "=============================================================================="
+    echo "Running: ${agent} against ${instance_id}"
+    echo "Image: ${image_name}"
+    echo "=============================================================================="
+
+    docker run --rm \
+        --name "swe_${agent}_${instance_id}" \
+        --memory 8g \
+        --memory-swap 8g \
+        --pids-limit 500 \
+        --tmpfs /tmp:rw,noexec,nosuid,size=2g \
+        --cap-drop ALL \
+        --cap-add NET_RAW \
+        --security-opt no-new-privileges:true \
+        --add-host host.docker.internal:host-gateway \
+        -v "${WORKSPACE_DIR}:/workspace:rw" \
+        -v "${bundle_dir}:/agent:ro" \
+        "$image_name" \
+        /agent/entrypoint.sh \
+        "${instance_id}" \
+        "https://github.com/${repo_url}" \
+        "${base_commit}" \
+        "${problem_statement}"
+}
+
+# ==============================================================================
+# RUN-ALL — run agent against all instances
+# ==============================================================================
+do_run_all() {
+    local agent="${1:?Usage: $0 --run-all <agent>}"
+
+    # Validate agent exists
+    if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
+        echo "ERROR: Agent '${agent}' not found."
+        exit 1
+    fi
+
+    # Get all instance IDs
+    while read -r instance_id; do
+        do_run "$agent" "$instance_id"
+    done < <(fetch_dataset | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for inst in data:
+    print(inst['instance_id'])
+")
 }
 
 # ==============================================================================
@@ -485,6 +628,12 @@ case "$1" in
         ;;
     --rebuild)
         do_rebuild "${2:-}"
+        ;;
+    --run)
+        do_run "${2:-}" "${3:-}"
+        ;;
+    --run-all)
+        do_run_all "${2:-}"
         ;;
     --eval)
         do_eval "${2:-}"

@@ -1,12 +1,12 @@
 # SWE-bench + Pi Coding Agent
 
-Self-contained agent bundles mounted into **swebench harness** images for running coding agents against **SWE-bench Verified** tasks.
+Self-contained agent bundles mounted into swebench eval images for running coding agents against **SWE-bench Verified** tasks.
 
 ## Architecture
 
 ```
 swe-bench/
-├── run.sh                         # Orchestrator (index, build, eval, status)
+├── run.sh                         # Orchestrator (index, build, run, eval)
 ├── eval_local_worker.py           # Per-instance evaluator (runs on host)
 │
 ├── agents/pi/                     # Pi agent — self-contained bundle
@@ -21,9 +21,10 @@ swe-bench/
 └── workspace/outputs/             # Per-instance results
 ```
 
-**Key design:** We do NOT build Docker images. The swebench harness provides
-the container runtime. Our agent bundles are self-contained directories with
-Node.js, pi CLI, and config — mounted read-only at runtime by the harness.
+**Key design:** We build self-contained agent bundles (Node.js + pi CLI + config).
+Our `run.sh` spins up the swebench eval image for each instance, mounts our
+bundle read-only at `/agent`, and calls `entrypoint.sh` inside it. SWE-bench
+then compares our output patches.
 
 ## Quick Start
 
@@ -42,22 +43,36 @@ Fetches and caches all 500 SWE-bench Verified instances from HuggingFace.
 ./run.sh --build pi       # build only the 'pi' bundle
 ```
 
-No Docker images are built. Each agent's self-contained bundle is created under
-`agents/<agent>/bundle/` containing Node.js, pi CLI, config files, and entrypoint.
+No Docker images are built by us. Each agent's self-contained bundle is created
+under `agents/<agent>/bundle/` containing Node.js, pi CLI, config files, and
+entrypoint.
 
-To force a from-scratch rebuild (e.g. to pull the latest pi CLI):
+To force a from-scratch rebuild:
 
 ```bash
 ./run.sh --rebuild          # rebuild all bundles from scratch
 ./run.sh --rebuild pi       # rebuild only the 'pi' bundle
 ```
 
-### 3. Run agents
+### 3. Run an agent against a specific instance
 
-The swebench harness launches containers using its own images, mounting our
-agent bundle at `/agent` (read-only) and outputs at `/output` (writable).
+```bash
+./run.sh --run pi django__django-11039
+```
 
-### 4. Evaluate collected patches (Docker-free)
+Spins up the swebench eval image for that instance, mounts our agent bundle
+read-only at `/agent`, and calls `entrypoint.sh` inside it. Results persist in
+`outputs/django__django-11039/`.
+
+### 4. Run against all instances
+
+```bash
+./run.sh --run-all pi
+```
+
+Iterates through all 500 verified instances sequentially.
+
+### 4b. Evaluate collected patches (Docker-free)
 
 ```bash
 ./run.sh --eval pi          # evaluate collected patches (no Docker access)
@@ -65,8 +80,7 @@ agent bundle at `/agent` (read-only) and outputs at `/output` (writable).
 ```
 
 Evaluation follows the [SWE-bench quickstart](https://www.swebench.com/SWE-bench/guides/quickstart/)
-methodology and is a **separate step from agent execution**. Runs on the host
-(no Docker needed).
+methodology and is a **separate step from `--run`**. Runs on the host (no Docker).
 
 For each collected patch, `--eval`:
 1. clones the repo at the base commit,
@@ -98,11 +112,17 @@ Self-contained, relocatable directory containing:
 
 Built by `agents/pi/build_bundle.sh`. No Docker image needed.
 
-### Container runtime (provided by swebench harness)
-The harness launches containers using its own images with:
+### Container runtime (swebench eval images)
+Each instance has a pre-built swebench image:
+```
+swebench/sweb.eval.x86_64.django_1776_django-11039:latest
+```
+
+Our `run.sh` spins up that image with:
 1. Agent bundle mounted read-only at `/agent`
 2. Outputs written to writable `/output/[instance_id]/`
 3. Cached repos in `/workspace/repos/`
+4. Calls `/agent/entrypoint.sh` as the container command
 
 ### Entrypoint
 The entrypoint script handles:
@@ -125,6 +145,14 @@ outputs/<instance_id>/
     ├── predictions.json     # SWE-bench JSON input
     └── harness.log          # Full evaluation output
 ```
+
+## Security Hardening
+
+Containers are intentionally locked down:
+- **Dropped all capabilities** — only `NET_RAW` added back
+- **No new privileges** — `no-new-privileges:true`
+- **Memory limit** — 8 GB RAM + swap, 500 PID limit
+- **tmpfs mounts** — `/tmp` is tmpfs with `noexec,nosuid`
 
 ## Configuration
 

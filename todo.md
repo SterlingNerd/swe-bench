@@ -6,7 +6,7 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
    - [x] Remove any build stages or multi-stage references that depended on it
    - [x] Verify nothing else in the repo references it (grep -r)
    - [x] Commit cleanup
-   - **New architecture:** No Docker images built — swebench harness provides container runtime, we provide self-contained agent bundles mounted at /agent
+   - **New architecture:** No Docker images built by us — we use swebench eval images (swebench/sweb.eval.x86_64.<repo>_1776_<issue>:latest), mount our agent bundle at /agent, call entrypoint.sh inside
 
 2. [x] Refactor `--build pi` into a self-contained agent bundle
    - [x] Audit current `--build pi` — what does it do today? (read script)
@@ -27,6 +27,7 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
    - [x] Verify the swebench/sweb/env container has everything needed (bash, git, etc.)
    - [x] Handle multiple architectures if needed (x86_64 vs aarch64)
    - [x] Test: can the container see `/agent` (ro) and write to `/output`?
+   - **Implementation:** run.sh --run spins up swebench eval image, mounts bundle at /agent, calls entrypoint.sh
 
 4. [x] Pass inference URL so pi can connect inside the container
    - [x] Use pre-baked `models.json` + `auth.json` in the agent bundle (no secrets to worry about)
