@@ -3,16 +3,15 @@
 # SWE-bench Agent Entrypoint — runs the pi coding agent.
 #
 # Works with a self-contained agent bundle mounted at /agent by the swebench
-# harness. All outputs go to /output/[instance_id]/.
+# harness. Copies config to a writable location, then runs pi.
 #
 # Usage:
 #   /entrypoint.sh --interactive          Drop into interactive shell
 #   /entrypoint.sh <instance_id> <repo_url> <base_commit> <problem_statement>
 #
-# The swebench harness provides the container runtime and mounts:
+# Container mounts (provided by swebench harness):
 #   /agent    → agent bundle (read-only) — Node.js + pi CLI + config
-#   /output   → writable output directory
-#   /workspace/repos → cached cloned repos (optional, read-write)
+#   /testbed  → writable testbed directory
 # ==============================================================================
 
 set -euo pipefail
@@ -23,10 +22,33 @@ if [ ! -d "${AGENT_BUNDLE}" ]; then
     exit 1
 fi
 
+# --- Setup writable config dir ---
+# Copy .pi config from read-only bundle to a writable location
+PI_CONFIG_DIR="/tmp/.pi"
+mkdir -p "${PI_CONFIG_DIR}"
+if [ -d "${AGENT_BUNDLE}/.pi" ]; then
+    cp -r "${AGENT_BUNDLE}/.pi/"* "${PI_CONFIG_DIR}/" 2>/dev/null || true
+fi
+
+# --- Setup paths ---
+OUTPUT_DIR="/testbed/outputs/${INSTANCE_ID:-unknown}"
+REPOS_DIR="/testbed/repos"
+NODE_BIN="${AGENT_BUNDLE}/bin"
+
+export PATH="${NODE_BIN}:${PATH}"
+export HOME="${PI_CONFIG_DIR}"
+
+echo "=============================================================================="
+echo "SWE-bench Agent: ${INSTANCE_ID:-unknown}"
+echo "Agent bundle: ${AGENT_BUNDLE}"
+echo "Node.js: $(node --version 2>/dev/null || echo 'not found')"
+echo "pi CLI:  $(pi --version 2>/dev/null || echo 'not found')"
+echo "Config:  ${PI_CONFIG_DIR}/"
+echo "=============================================================================="
+
 # Interactive mode: drop into shell for debugging
 if [ "${1:-}" = "--interactive" ]; then
     echo "Starting interactive shell..."
-    export PATH="${AGENT_BUNDLE}/bin:${PATH}"
     exec bash
 fi
 
@@ -35,21 +57,8 @@ REPO_URL="${2:?Missing repo_url}"
 BASE_COMMIT="${3:?Missing base_commit}"
 PROBLEM_STATEMENT="${4:?Missing problem_statement}"
 
-# --- Setup paths ---
+# --- Setup output dir ---
 OUTPUT_DIR="/testbed/outputs/${INSTANCE_ID}"
-REPOS_DIR="/testbed/repos"
-NODE_BIN="${AGENT_BUNDLE}/bin"
-
-export PATH="${NODE_BIN}:${PATH}"
-
-echo "=============================================================================="
-echo "SWE-bench Agent: ${INSTANCE_ID}"
-echo "Agent bundle: ${AGENT_BUNDLE}"
-echo "Node.js: $(node --version 2>/dev/null || echo 'not found')"
-echo "pi CLI:  $(pi --version 2>/dev/null || echo 'not found')"
-echo "=============================================================================="
-
-# Create output directory
 mkdir -p "${OUTPUT_DIR}/eval"
 
 # Verification: write hello world
