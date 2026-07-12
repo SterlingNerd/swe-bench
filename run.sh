@@ -17,6 +17,7 @@
 #   ./run.sh --summarize [agent]  Combine and summarize collected results
 #   ./run.sh --status            Show completion status
 #   ./run.sh --interactive <id>  Drop into interactive shell in swebench image
+#   ./run.sh --init              Install swebench harness (creates .venv/swebench)
 #
 # Workflow:
 #   1. ./run.sh --index          (one-time: cache the dataset)
@@ -52,6 +53,10 @@ HF_DATASET="princeton-nlp/SWE-bench_Verified"
 
 # SWE-bench image registry
 SWEBENCH_REGISTRY="swebench"
+
+# SWE-bench venv (for harness)
+SWEBENCH_VENV="${REPO_ROOT}/.venv/swebench"
+SWEBENCH_PY="${SWEBENCH_VENV}/bin/python"
 
 # ==============================================================================
 # DATASET — fetch and cache from HuggingFace
@@ -170,6 +175,10 @@ COMMANDS
       Drop into an interactive shell inside the swebench eval image for that
       instance. Our agent bundle is mounted read-only at /agent. Useful for
       debugging entrypoint.sh or testing pi manually inside the harness image.
+
+  --init
+      Install the official swebench Python package in a local venv
+      (.venv/swebench/). Required before --eval to use the official harness.
 
 ENVIRONMENT
   SWE_WORKSPACE_DIR
@@ -441,7 +450,7 @@ for inst in data:
 }
 
 # ==============================================================================
-# EVAL — Docker-free evaluation (SWE-bench quickstart methodology)
+# EVAL — use official swebench harness
 # ==============================================================================
 do_eval() {
     local agent="${1:?Usage: $0 --eval <agent>}"
@@ -453,22 +462,25 @@ do_eval() {
         exit 1
     fi
 
+    # Check swebench is installed
+    if [ ! -f "${SWEBENCH_PY}" ]; then
+        echo "ERROR: swebench not installed. Run './run.sh --init' first."
+        exit 1
+    fi
+
     local eval_dir="${OUTPUT_DIR}"
     [ -d "$eval_dir" ] || { echo "No outputs found. Run instances first (--run or --run-all)."; return; }
 
+    # Collect instance IDs that have patches
     local instance_ids=()
     for d in "${eval_dir}"/*/; do
         [ -d "$d" ] && [ -f "${d}patch.diff" ] && instance_ids+=("$(basename "$d")")
     done
     [ ${#instance_ids[@]} -eq 0 ] && { echo "No patches found to evaluate. Run instances first."; return; }
 
-    echo "=============================================================================="
-    echo "Evaluating ${#instance_ids[@]} patch(es) for '${agent}' (quickstart-style, no Docker)"
-    echo "=============================================================================="
-
-    # Also write predictions.json in the standard SWE-bench format
+    # Build predictions file in swebench format
     local preds="${eval_dir}/predictions.json"
-    EVAL_DIR="${eval_dir}" AGENT_NAME="${agent}" PREDS="${preds}" python3 -c "
+    "${SWEBENCH_PY}" -c "
 import sys, json, os
 results = []
 for instance_id in sys.argv[1:]:
@@ -485,54 +497,22 @@ for instance_id in sys.argv[1:]:
 with open(os.environ['PREDS'], 'w') as f:
     json.dump(results, f)
 print(f'Wrote {len(results)} predictions to {os.environ[\"PREDS\"]}')
-" "${instance_ids[@]}"
+" EVAL_DIR="${eval_dir}" AGENT_NAME="${agent}" PREDS="${preds}" "${instance_ids[@]}"
 
-    if [ ! -f "${REPO_ROOT}/eval_local_worker.py" ]; then
-        echo "ERROR: eval_local_worker.py not found at ${REPO_ROOT}/eval_local_worker.py"
-        exit 1
-    fi
+    echo "=============================================================================="
+    echo "Running swebench harness on ${#instance_ids[@]} patch(es) for '${agent}'"
+    echo "=============================================================================="
 
-    for iid in "${instance_ids[@]}"; do
-        local out_dir="${eval_dir}/${iid}"
-        echo "--- ${iid} ---"
-        # Prepare eval input from the dataset (host python)
-        INSTANCE_ID="$iid" CACHE_FILE="$CACHE_FILE" OUT_DIR="$out_dir" python3 - <<'PY'
-import json, os
-iid=os.environ['INSTANCE_ID']; cache=os.environ['CACHE_FILE']; out=os.environ['OUT_DIR']
-data=json.load(open(cache))
-inst=next((i for i in data if i['instance_id']==iid), None)
-assert inst, "instance not found: "+iid
-inp={
-  "instance_id": iid,
-  "repo": inst["repo"],
-  "base_commit": inst["base_commit"],
-  "test_patch": inst.get("test_patch",""),
-  "FAIL_TO_PASS": json.loads(inst.get("FAIL_TO_PASS","[]") or "[]"),
-  "PASS_TO_PASS": json.loads(inst.get("PASS_TO_PASS","[]") or "[]"),
-}
-json.dump(inp, open(os.path.join(out,"eval_local_input.json"),"w"), indent=2)
-print("prepared", iid)
-PY
-        # Run the worker on the host (no Docker — uses host Python + git)
-        python3 "${REPO_ROOT}/eval_local_worker.py" "${out_dir}"
-
-        # Fold the result into result.json
-        if [ -f "$out_dir/local_eval.json" ]; then
-            OUT_DIR="$out_dir" python3 - <<'PY'
-import json, os
-out=os.environ['OUT_DIR']
-le=json.load(open(os.path.join(out,'local_eval.json')))
-rp=os.path.join(out,'result.json')
-meta=json.load(open(rp)) if os.path.exists(rp) else {}
-meta['local_eval']=le['status']
-meta['local_eval_detail']={'install_ok':le.get('install_ok'),
-                           'model_patch_applied':le.get('model_patch_applied'),
-                           'tests':le.get('tests')}
-json.dump(meta, open(rp,'w'), indent=2)
-print("updated", os.path.basename(out), "->", le['status'])
-PY
-        fi
-    done
+    # Run the official swebench harness
+    "${SWEBENCH_PY}" -m swebench.harness.run_evaluation \
+        --dataset_name "${HF_DATASET}" \
+        --split "test" \
+        --predictions_path "${preds}" \
+        --max_workers 1 \
+        --cache_level instance \
+        --report_dir "${eval_dir}" \
+        --run_id "${agent}" \
+        "${instance_ids[@]}"
 }
 
 # ==============================================================================
@@ -617,6 +597,25 @@ do_status() {
 }
 
 # ==============================================================================
+# INIT — install swebench harness in a local venv
+# ==============================================================================
+do_init() {
+    echo "=== Installing swebench harness ==="
+    if [ -f "${SWEBENCH_PY}" ]; then
+        echo "swebench already installed at ${SWEBENCH_VENV}"
+        "${SWEBENCH_PY}" -c "import swebench; print(f'  Version: {swebench.__version__}')"
+        return 0
+    fi
+
+    echo "Creating venv at ${SWEBENCH_VENV}..."
+    python3 -m venv "${SWEBENCH_VENV}"
+    echo "Installing swebench..."
+    "${SWEBENCH_VENV}/bin/pip" install swebench 2>&1 | tail -3
+    "${SWEBENCH_PY}" -c "import swebench; print(f'  Version: {swebench.__version__}')"
+    echo "=== swebench installed ==="
+}
+
+# ==============================================================================
 # INTERACTIVE — drop into interactive shell in swebench eval image
 # ==============================================================================
 do_interactive() {
@@ -692,6 +691,9 @@ case "$1" in
         ;;
     --status)
         do_status
+        ;;
+    --init)
+        do_init
         ;;
     --interactive|-i)
         do_interactive "${2:-}"

@@ -4,6 +4,9 @@ workspace/
 # Agent bundles (self-contained, built at runtime)
 agents/*/bundle/
 
+# Python venvs
+.venv/
+
 # Local logs
 *.log
 
