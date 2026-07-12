@@ -402,8 +402,11 @@ do_run() {
         --cap-add NET_RAW \
         --security-opt no-new-privileges:true \
         --add-host host.docker.internal:host-gateway \
+        -u 1001:1001 \
+        -e "HOME=/workspace" \
         -v "${WORKSPACE_DIR}:/workspace:rw" \
         -v "${bundle_dir}:/agent:ro" \
+        -v "${bundle_dir}/.pi:/workspace/.pi:rw" \
         "$image_name" \
         /agent/entrypoint.sh \
         "${instance_id}" \
@@ -643,8 +646,11 @@ do_interactive() {
         --cap-add NET_RAW \
         --security-opt no-new-privileges:true \
         --add-host host.docker.internal:host-gateway \
+        -u 1001:1001 \
+        -e "HOME=/workspace" \
         -v "${WORKSPACE_DIR}:/workspace:rw" \
         -v "${AGENTS_DIR}/pi/bundle:/agent:ro" \
+        -v "${AGENTS_DIR}/pi/bundle/.pi:/workspace/.pi:rw" \
         "$image_name" bash
 }
 
