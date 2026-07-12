@@ -24,10 +24,10 @@ fi
 
 # --- Setup writable config dir ---
 # Copy .pi config from read-only bundle to a writable location
-PI_CONFIG_DIR="/tmp/.pi"
-mkdir -p "${PI_CONFIG_DIR}"
+# pi looks for .pi in HOME, so set HOME=/tmp and put .pi there
+mkdir -p /tmp/.pi
 if [ -d "${AGENT_BUNDLE}/.pi" ]; then
-    cp -r "${AGENT_BUNDLE}/.pi/"* "${PI_CONFIG_DIR}/" 2>/dev/null || true
+    cp -r "${AGENT_BUNDLE}/.pi/"* /tmp/.pi/ 2>/dev/null || true
 fi
 
 # --- Setup paths ---
@@ -36,7 +36,7 @@ REPOS_DIR="/testbed/repos"
 NODE_BIN="${AGENT_BUNDLE}/bin"
 
 export PATH="${NODE_BIN}:${PATH}"
-export HOME="${PI_CONFIG_DIR}"
+export HOME="/tmp"
 
 echo "=============================================================================="
 echo "SWE-bench Agent: ${INSTANCE_ID:-unknown}"
