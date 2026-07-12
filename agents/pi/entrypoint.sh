@@ -1,21 +1,34 @@
 #!/bin/bash
 # ==============================================================================
-# SWE-bench Agent Entrypoint — generic clone → run → extract → eval
+# SWE-bench Agent Entrypoint — runs the pi coding agent inside a container.
+#
+# This version works with a self-contained agent bundle mounted at /agent.
+# All outputs go to /output/[instance_id]/.
 #
 # Usage:
 #   /entrypoint.sh --interactive          Drop into interactive shell
 #   /entrypoint.sh <instance_id> <repo_url> <base_commit> <problem_statement>
 #
-# This script is shared across agent containers (pi, codex, claude, etc.).
-# The agent-specific part is just the command that runs the agent.
-# Everything else (clone, extract patch, eval) is in the base image.
+# Container mounts:
+#   /agent    → agent bundle (read-only) — contains Node.js + pi CLI + config
+#   /output   → writable output directory
+#   /workspace/repos → cached cloned repos (optional, read-write)
 # ==============================================================================
 
 set -euo pipefail
 
+# --- Locate the agent bundle ---
+AGENT_BUNDLE="${AGENT_BUNDLE_DIR:-/agent}"
+if [ ! -d "${AGENT_BUNDLE}" ]; then
+    echo "ERROR: Agent bundle not found at ${AGENT_BUNDLE}"
+    echo "  Make sure it's mounted read-only at /agent"
+    exit 1
+fi
+
 # Interactive mode: drop into shell for debugging
 if [ "${1:-}" = "--interactive" ]; then
     echo "Starting interactive shell..."
+    export PATH="${AGENT_BUNDLE}/.pi/node/bin:${PATH}"
     exec bash
 fi
 
@@ -24,13 +37,18 @@ REPO_URL="${2:?Missing repo_url}"
 BASE_COMMIT="${3:?Missing base_commit}"
 PROBLEM_STATEMENT="${4:?Missing problem_statement}"
 
-WORKSPACE="/home/agent/workspace"
-REPOS_DIR="${WORKSPACE}/repos"
-OUTPUT_DIR="${WORKSPACE}/outputs/${INSTANCE_ID}"
-AGENT_CMD="pi -p --session-dir /tmp/pi-sessions"
+# --- Setup paths ---
+OUTPUT_DIR="/output/${INSTANCE_ID}"
+REPOS_DIR="${SWE_WORKSPACE_DIR:-/workspace}/repos"
+NODE_BIN="${AGENT_BUNDLE}/.pi/node/bin"
+
+export PATH="${NODE_BIN}:${PATH}"
 
 echo "=============================================================================="
 echo "SWE-bench Agent: ${INSTANCE_ID}"
+echo "Agent bundle: ${AGENT_BUNDLE}"
+echo "Node.js: $(node --version 2>/dev/null || echo 'not found')"
+echo "pi CLI:  $(pi --version 2>/dev/null || echo 'not found')"
 echo "=============================================================================="
 
 # Create output directory
@@ -59,15 +77,15 @@ fi
 cd "$REPO_DIR" && git checkout "$BASE_COMMIT" >/dev/null 2>&1
 cd - >/dev/null
 
-# Run the agent
+# Run the agent using the bundled pi CLI
 echo "  Running agent..."
 START_TIME=$(date +%s)
 AGENT_OUTPUT="${OUTPUT_DIR}/agent_output.txt"
 
-${AGENT_CMD} "${PROBLEM_STATEMENT}" 2>&1 | tee "${AGENT_OUTPUT}" || true
+pi -p --session-dir /tmp/pi-sessions "${PROBLEM_STATEMENT}" 2>&1 | tee "${AGENT_OUTPUT}" || true
 
 # Save session file if it exists
-if [ -f "/tmp/pi-sessions/${INSTANCE_ID}/session.jsonl" ]; then
+if [ -d "/tmp/pi-sessions/${INSTANCE_ID}" ]; then
     cp "/tmp/pi-sessions/${INSTANCE_ID}/session.jsonl" "${OUTPUT_DIR}/session.jsonl" 2>/dev/null || true
 fi
 
@@ -83,9 +101,9 @@ if [ "$PATCH_SIZE" -eq 0 ]; then
     echo '{"status": "no_patch", "patch_bytes": 0}' > "${OUTPUT_DIR}/result.json"
 else
     echo "  Patch collected (${PATCH_SIZE} bytes)."
-    echo "  Run './run.sh --eval <agent>' to evaluate with swebench harness."
     END_TIME=$(date +%s)
     ELAPSED=$((END_TIME - START_TIME))
     echo "{\"status\": \"patch_collected\", \"patch_bytes\": ${PATCH_SIZE}, \"elapsed_seconds\": ${ELAPSED}}" > "${OUTPUT_DIR}/result.json"
 fi
+
 echo "  Output: ${OUTPUT_DIR}/"

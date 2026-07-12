@@ -2,13 +2,12 @@
 """
 Lightweight per-instance evaluator for SWE-bench patches.
 
-Runs INSIDE the swe-base container (which has pyenv pythons + git + build
-tooling). For one instance it:
+Runs on the host (no Docker needed). For one instance it:
   1. clones the repo at base_commit (reusing workspace/repos if present)
   2. applies the collected model patch (patch.diff)
   3. applies the dataset's test_patch (ignored if it conflicts, e.g. the
      model already added the test)
-  4. creates a venv with a suitable pyenv Python and `pip install -e .`
+  4. creates a venv with a suitable Python and `pip install -e .`
   5. runs the instance's FAIL_TO_PASS + PASS_TO_PASS tests with pytest
   6. writes local_eval.json into the instance output dir
 
@@ -56,8 +55,7 @@ def normalize_test_ids(ids):
 
 
 def main():
-    # The repos were likely cloned by a different UID (the agent user); running
-    # as root here would otherwise trip git's "dubious ownership" guard.
+    # Allow git to access repos regardless of ownership
     run(["git", "config", "--global", "--add", "safe.directory", "*"], check=False)
     out = sys.argv[1]
     inp = json.load(open(os.path.join(out, "eval_local_input.json")))
@@ -66,7 +64,17 @@ def main():
     ftps = normalize_test_ids(inp.get("FAIL_TO_PASS", []) or [])
     ptps = normalize_test_ids(inp.get("PASS_TO_PASS", []) or [])
     testpatch = inp.get("test_patch", "") or ""
-    repodir = os.path.join("/home/agent/workspace/repos", repo)
+
+    # Determine workspace/repos directory — try common locations
+    repo_dir_candidates = [
+        os.path.join(os.environ.get("SWE_WORKSPACE_DIR", "."), "repos", repo),
+        os.path.join("/workspace/repos", repo),
+    ]
+    repodir = None
+    for candidate in repo_dir_candidates:
+        if os.path.isdir(candidate):
+            repodir = candidate
+            break
 
     if not os.path.isdir(repodir):
         run(["git", "clone", "https://github.com/%s.git" % repo, repodir], check=True)
@@ -89,16 +97,24 @@ def main():
         tf.close()
         run(["git", "-C", repodir, "apply", tf.name], check=False)
 
-    # Pick a working pyenv Python
-    candidates = ["3.8.20", "3.7.17", "3.6.15", "3.9.23", "3.10.16", "3.11.11", "3.5.10"]
+    # Pick a working Python — try pyenv first, then system Python
+    candidates_pyenv = ["3.8.20", "3.7.17", "3.6.15", "3.9.23", "3.10.16", "3.11.11", "3.5.10"]
     py = None
     venv = None
-    for v in candidates:
+    for v in candidates_pyenv:
         p = "/opt/pyenv/versions/%s/bin/python3" % v
         if os.path.exists(p):
             venv = tempfile.mkdtemp()
             if run([p, "-m", "venv", venv]).returncode == 0:
                 py = p
+                break
+            venv = None
+    # Fallback to system Python
+    if not py:
+        for sys_py in ["python3.10", "python3.9", "python3.8", "python3"]:
+            venv = tempfile.mkdtemp()
+            if run([sys_py, "-m", "venv", venv]).returncode == 0:
+                py = sys_py
                 break
             venv = None
     if not py:
