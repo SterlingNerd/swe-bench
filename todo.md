@@ -7,6 +7,7 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
    - [x] Verify nothing else in the repo references it (grep -r)
    - [x] Commit cleanup
    - **New architecture:** Minimal base image (bash+git) + self-contained agent bundles mounted at runtime
+
 2. [x] Refactor `--build pi` into a self-contained agent bundle
    - [x] Audit current `--build pi` — what does it do today? (read script)
    - [x] Design output layout: what goes in the bundle dir?
@@ -16,37 +17,22 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
      - node_modules with pinned deps (no system-level conflicts)
    - [x] Pin dependency versions explicitly (avoid transitive drift)
    - [x] Ensure the bundle is fully relocatable (no hardcoded paths)
-   - [ ] Test: build from scratch, verify `pi` runs standalone inside it
+   - [x] Test: build from scratch, verify `pi` runs standalone inside it
    - [x] Update any CI / Makefile targets that call `--build pi`
-   - [ ] Audit current `--build pi` — what does it do today? (read script)
-   - [ ] Design output layout: what goes in the bundle dir?
-     - pi binary / Node.js package
-     - all skills (from .config/pi or wherever they live)
-     - config files (pi config, any agent settings)
-     - node_modules with pinned deps (no system-level conflicts)
-   - [ ] Pin dependency versions explicitly (avoid transitive drift)
-   - [ ] Ensure the bundle is fully relocatable (no hardcoded paths)
-   - [ ] Test: build from scratch, verify `pi` runs standalone inside it
-   - [ ] Update any CI / Makefile targets that call `--build pi`
+
 3. [x] Container runtime: mount agent bundle read-only, outputs writable
    - [x] Study how SWE-bench launches containers (check `run.sh` or harness code)
    - [x] Mount the agent bundle at `/agent` with `-v ...:ro`
    - [x] Mount a writable volume at `/output` for all agent outputs
    - [x] Verify the swebench/sweb/env container has everything needed (bash, git, etc.)
-   - [ ] Handle multiple architectures if needed (x86_64 vs aarch64)
-   - [ ] Study how SWE-bench launches containers (check `run.sh` or harness code)
-   - [ ] Mount the agent bundle at `/agent` with `-v ...:ro`
-   - [ ] Mount a writable volume at `/output` for all agent outputs
-   - [ ] Verify the swebench/sweb/env container has everything needed (bash, git, etc.)
-   - [ ] Handle multiple architectures if needed (x86_64 vs aarch64)
-   - [ ] Test: can the container see `/agent` (ro) and write to `/output`?
+   - [x] Handle multiple architectures if needed (x86_64 vs aarch64)
+   - [x] Test: can the container see `/agent` (ro) and write to `/output`?
+
 4. [x] Pass inference URL so pi can connect inside the container
    - [x] Use pre-baked `models.json` + `auth.json` in the agent bundle (no secrets to worry about)
    - [x] Set baseUrl to `http://host.docker.internal:11434/v1` in the baked config
    - [ ] Test: point pi at a mock server, verify it connects
-   - [ ] Use pre-baked `models.json` + `auth.json` in the agent bundle (no secrets to worry about)
-   - [ ] Set baseUrl to `http://host.docker.internal:11434/v1` in the baked config
-   - [ ] Test: point pi at a mock server, verify it connects
+
 5. [x] Write `entrypoint.sh` shim
    - [x] Study existing `agents/pi/entrypoint.sh` — it already does most of this (clone, run pi, extract patch)
    - [x] Determine what info is available from the `--index` cache file:
@@ -57,28 +43,15 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
    - [x] Fill any gaps — if `--index` doesn't have something we need (e.g. test_patch), figure out how to get it
    - [x] All outputs go to `/output/[repo__num]/` (writable mount)
    - [x] Handle edge cases: repo already cloned? broken commits?
-   - [ ] Make it executable and test locally with a sample instance
-   - [ ] Study existing `agents/pi/entrypoint.sh` — it already does most of this (clone, run pi, extract patch)
-   - [ ] Determine what info is available from the `--index` cache file:
-     - `instance_id`, `repo`, `base_commit`, `problem_statement`, `test_patch`, `FAIL_TO_PASS`, `PASS_TO_PASS`
-   - [ ] Decide: does entrypoint.sh need to accept all these as args, or can it read from a mounted index?
-     - If args: map each CLI arg to the right field
-     - If mounted index: entrypoint reads JSON and extracts what it needs
-   - [ ] Fill any gaps — if `--index` doesn't have something we need (e.g. test_patch), figure out how to get it
-   - [ ] All outputs go to `/output/[repo__num]/` (writable mount)
-   - [ ] Handle edge cases: repo already cloned? broken commits?
-   - [ ] Make it executable and test locally with a sample instance
+   - [x] Make it executable and test locally with a sample instance
+
 6. [x] Save output patch to standardized location
    - [x] Output dir: `/output/[repo__num]/` (e.g. `/output/django__django-11039/`)
    - [x] In entrypoint.sh, write the generated diff as `patch.diff`
    - [x] Ensure the patch is a valid unified diff against the repo's base commit
    - [x] Handle case where pi produces no changes (empty patch? skip?)
    - [x] Align with SWE-bench conventions — check what the eval harness expects for patch location/format
-   - [ ] Output dir: `/output/[repo__num]/` (e.g. `/output/django__django-11039/`)
-   - [ ] In entrypoint.sh, write the generated diff as `patch.diff`
-   - [ ] Ensure the patch is a valid unified diff against the repo's base commit
-   - [ ] Handle case where pi produces no changes (empty patch? skip?)
-   - [ ] Align with SWE-bench conventions — check what the eval harness expects for patch location/format
+
 7. [x] Save session/debug files alongside the patch
    - [x] Output dir: `/output/[repo__num]/` (same as patch)
    - [x] Save anything useful for debugging:
@@ -87,13 +60,7 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
      - problem statement text
      - any pi debug logs or state files
    - [x] Ensure these don't interfere with the eval step (different filenames/extensions)
-   - [ ] Output dir: `/output/[repo__num]/` (same as patch)
-   - [ ] Save anything useful for debugging:
-     - pi session file (`session.jsonl` — already saved in current entrypoint.sh)
-     - agent output log (`agent_output.txt` — already captured)
-     - problem statement text
-     - any pi debug logs or state files
-   - [ ] Ensure these don't interfere with the eval step (different filenames/extensions)
+
 8. [x] Eval step: convert outputs → SWE-bench prediction JSONL → run harness
    - [x] Read the [SWE-bench eval guide](https://www.swebench.com/SWE-bench/guides/evaluation/) carefully
    - [x] Design the conversion:
@@ -103,18 +70,8 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
    - [ ] Run SWE-bench eval harness against it
    - [ ] Parse and summarize results (pass/fail, test outcomes)
    - [ ] Consider making this a single `./eval.sh` script for reproducibility
-   - [ ] Read the [SWE-bench eval guide](https://www.swebench.com/SWE-bench/guides/evaluation/) carefully
-   - [ ] Design the conversion:
-     - Scan `/output/[repo__num]/` dirs for `patch.diff` files per instance
-     - Map each patch to a JSONL entry with `instance_id`, `model_patch`
-   - [ ] Write the prediction JSONL file (standard SWE-bench format)
-   - [ ] Run SWE-bench eval harness against it
-   - [ ] Parse and summarize results (pass/fail, test outcomes)
-   - [ ] Consider making this a single `./eval.sh` script for reproducibility
+
 9. [ ] Re-discuss inference URL configuration once the rest is working
-   - [ ] Current: hardcoded `http://host.docker.internal:11434/v1` in pre-baked models.json
-   - [ ] Future: allow overriding via env var / config for different providers (Anthropic, OpenRouter, etc.)
-   - [ ] Decide: baked config per-provider? env var override? runtime rewrite?
    - [ ] Current: hardcoded `http://host.docker.internal:11434/v1` in pre-baked models.json
    - [ ] Future: allow overriding via env var / config for different providers (Anthropic, OpenRouter, etc.)
    - [ ] Decide: baked config per-provider? env var override? runtime rewrite?
