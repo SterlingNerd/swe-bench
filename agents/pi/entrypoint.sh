@@ -26,7 +26,7 @@ fi
 # Interactive mode: drop into shell for debugging
 if [ "${1:-}" = "--interactive" ]; then
     echo "Starting interactive shell..."
-    export PATH="${AGENT_BUNDLE}/.pi/node/bin:${PATH}"
+    export PATH="${AGENT_BUNDLE}/bin:${PATH}"
     exec bash
 fi
 
@@ -36,9 +36,9 @@ BASE_COMMIT="${3:?Missing base_commit}"
 PROBLEM_STATEMENT="${4:?Missing problem_statement}"
 
 # --- Setup paths ---
-OUTPUT_DIR="/output/${INSTANCE_ID}"
-REPOS_DIR="${SWE_WORKSPACE_DIR:-/workspace}/repos"
-NODE_BIN="${AGENT_BUNDLE}/.pi/node/bin"
+OUTPUT_DIR="/testbed/outputs/${INSTANCE_ID}"
+REPOS_DIR="/testbed/repos"
+NODE_BIN="${AGENT_BUNDLE}/bin"
 
 export PATH="${NODE_BIN}:${PATH}"
 
@@ -91,6 +91,9 @@ fi
 echo "  Extracting patch..."
 cd "$REPO_DIR" && git diff > "${OUTPUT_DIR}/patch.diff" 2>/dev/null || true
 cd - >/dev/null
+
+# Also write patch to /testbed/patch.diff for swebench harness
+cp "${OUTPUT_DIR}/patch.diff" /testbed/patch.diff 2>/dev/null || true
 
 PATCH_SIZE=$(wc -c < "${OUTPUT_DIR}/patch.diff" 2>/dev/null || echo 0)
 
