@@ -634,9 +634,9 @@ no_patch=sum(1 for r in rows if r['status']=='no_patch')
 summary={'agent_filter':agent or None,'total':total,
          'resolved':resolved,'failed':failed,'errored':errored,'no_patch':no_patch,'rows':rows}
 json.dump(summary, open(out_json,'w'), indent=2)
-print(f"{'instance_id':42s} {'status':12s} {'local_eval':12s} {'patch_B':>8s}")
+print(f"{'instance_id':42s} {'status':12s} {'local_eval':12s} {'patch_B':>8s} {'elapsed_s':>10s}")
 for r in rows:
-    print(f"{r['instance_id']:42s} {str(r['status']):12s} {str(r['local_eval']):12s} {str(r['patch_bytes'] or 0):>8s}")
+    print(f"{r['instance_id']:42s} {str(r['status']):12s} {str(r['local_eval']):12s} {str(r['patch_bytes'] or 0):>8s} {str(r['elapsed_seconds'] or 0):>10s}")
 print(f"\nTotal: {total} | resolved: {resolved} | failed: {failed} | error: {errored} | no_patch: {no_patch}")
 print(f"Summary written to {out_json}")
 PY

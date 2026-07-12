@@ -68,7 +68,7 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
      - Scan `/workspace/outputs/[repo__num]/` dirs for `patch.diff` files per instance
      - Map each patch to SWE-bench prediction format (JSONL with instance_id, model_patch)
    - [x] Call official swebench eval harness (not reimplement)
-   - [ ] Parse and summarize results (pass/fail, test outcomes)
+   - [x] Parse and summarize results (pass/fail, test outcomes) — --summarize shows status/local_eval/patch_bytes/elapsed
    - [ ] Consider making this a single `./eval.sh` script for reproducibility
 
 9. [ ] Re-discuss inference URL configuration once the rest is working
