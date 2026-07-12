@@ -16,6 +16,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="${1:-${SCRIPT_DIR}/bundle}"
 NODE_VERSION="22.14.0"
+FD_VERSION="10.2.0"
+RG_VERSION="15.0.0"
 
 echo "=== Building pi agent bundle ==="
 echo "Output: ${BUNDLE_DIR}"
@@ -71,10 +73,10 @@ npm install --ignore-scripts "@earendil-works/pi-coding-agent@latest" 2>&1 | tai
 
 # Create a wrapper script for pi that uses the bundled node
 # Note: node_modules is at BUNDLE_DIR level, not bin/ level
-cat > "${BUNDLE_DIR}/bin/pi" <<WRAPPER
+cat > "${BUNDLE_DIR}/bin/pi" <<'WRAPPER'
 #!/bin/bash
-SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/../" && pwd)"
-exec "\${SCRIPT_DIR}/bin/node" "\${SCRIPT_DIR}/node_modules/@earendil-works/pi-coding-agent/dist/cli.js" "\$@"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../" && pwd)"
+exec "${SCRIPT_DIR}/bin/node" "${SCRIPT_DIR}/node_modules/@earendil-works/pi-coding-agent/dist/cli.js" "$@"
 WRAPPER
 chmod +x "${BUNDLE_DIR}/bin/pi"
 
@@ -99,6 +101,45 @@ if [ -d "${PI_SRC}/npm" ]; then
     cp -r "${PI_SRC}/npm/"* "${AGENT_DIR}/npm/" 2>/dev/null || true
 fi
 
+# Ensure config files are readable by all users (container runs as uid 1001)
+chmod -R a+r "${AGENT_DIR}/" 2>/dev/null || true
+
+# --- Download fd (fast alternative to find) ---
+FD_BIN="${BUNDLE_DIR}/bin/fd"
+if [ ! -f "${FD_BIN}" ]; then
+    FD_GITHUB_ARCH="${NODE_ARCH}"
+    [ "$NODE_ARCH" = "x64" ] && FD_GITHUB_ARCH="x86_64"
+    echo "Downloading fd ${FD_VERSION} for ${FD_GITHUB_ARCH}..."
+    FD_TARBALL="/tmp/fd-v${FD_VERSION}-${FD_GITHUB_ARCH}-unknown-linux-gnu.tar.gz"
+    if ! curl -fsSL "https://github.com/sharkdp/fd/releases/download/v${FD_VERSION}/fd-v${FD_VERSION}-${FD_GITHUB_ARCH}-unknown-linux-gnu.tar.gz" \
+        -o "${FD_TARBALL}" 2>/dev/null; then
+        if [ ! -f "$FD_TARBALL" ]; then
+            echo "ERROR: Cannot download fd. Please install manually or check network."
+            exit 1
+        fi
+    fi
+    tar -xzf "${FD_TARBALL}" -C "${BUNDLE_DIR}/bin" --strip-components=1 "fd-v${FD_VERSION}-${FD_GITHUB_ARCH}-unknown-linux-gnu/fd"
+    rm -f "${FD_TARBALL}"
+fi
+
+# --- Download ripgrep (fast grep) ---
+RG_BIN="${BUNDLE_DIR}/bin/rg"
+if [ ! -f "${RG_BIN}" ]; then
+    RG_GITHUB_ARCH="${NODE_ARCH}"
+    [ "$NODE_ARCH" = "x64" ] && RG_GITHUB_ARCH="x86_64"
+    echo "Downloading ripgrep ${RG_VERSION} for ${RG_GITHUB_ARCH}..."
+    RG_TARBALL="/tmp/ripgrep-${RG_VERSION}-${RG_GITHUB_ARCH}-unknown-linux-musl.tar.gz"
+    if ! curl -fsSL "https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}/ripgrep-${RG_VERSION}-${RG_GITHUB_ARCH}-unknown-linux-musl.tar.gz" \
+        -o "${RG_TARBALL}" 2>/dev/null; then
+        if [ ! -f "$RG_TARBALL" ]; then
+            echo "ERROR: Cannot download ripgrep. Please install manually or check network."
+            exit 1
+        fi
+    fi
+    tar -xzf "${RG_TARBALL}" -C "${BUNDLE_DIR}/bin" --strip-components=1 "ripgrep-${RG_VERSION}-${RG_GITHUB_ARCH}-unknown-linux-musl/rg"
+    rm -f "${RG_TARBALL}"
+fi
+
 # --- Copy entrypoint.sh ---
 echo "Copying entrypoint..."
 cp "${SCRIPT_DIR}/entrypoint.sh" "${BUNDLE_DIR}/entrypoint.sh"
@@ -111,6 +152,8 @@ du -sh "${BUNDLE_DIR}" 2>/dev/null || true
 echo ""
 echo "Node.js: $(ls ${BUNDLE_DIR}/bin/node 2>/dev/null && echo 'OK' || echo 'MISSING')"
 echo "pi CLI:  $(ls ${BUNDLE_DIR}/bin/pi 2>/dev/null && echo 'OK' || echo 'MISSING')"
+echo "fd:      $(ls ${BUNDLE_DIR}/bin/fd 2>/dev/null && echo 'OK' || echo 'MISSING')"
+echo "rg:      $(ls ${BUNDLE_DIR}/bin/rg 2>/dev/null && echo 'OK' || echo 'MISSING')"
 echo "settings: $(ls ${AGENT_DIR}/settings.json 2>/dev/null && echo 'OK' || echo 'MISSING')"
 echo "models:   $(ls ${AGENT_DIR}/models.json 2>/dev/null && echo 'OK' || echo 'MISSING')"
 echo "auth:     $(ls ${AGENT_DIR}/auth.json 2>/dev/null && echo 'OK' || echo 'MISSING')"
