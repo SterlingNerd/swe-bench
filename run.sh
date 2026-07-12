@@ -2,34 +2,28 @@
 # ==============================================================================
 # SWE-bench Orchestrator — unified build, index, list, and run
 #
-# Architecture: Minimal base image + self-contained agent bundle mounted at runtime.
+# Architecture: Self-contained agent bundles mounted into swebench harness images.
+# We do NOT build Docker images — the swebench harness provides the container runtime.
 #
 # Usage:
 #   ./run.sh --help              Show this help
 #   ./run.sh --index             Fetch and cache problem listings from HuggingFace
 #   ./run.sh --list [filter]     List problems (optional grep filter)
-#   ./run.sh --build [agent]     Build base image + agent bundle(s)
-#   ./run.sh --rebuild [scope] Rebuild from scratch (--no-cache): all|base|<agent>
-#   ./run.sh --run <agent> <id>  Run an agent against a specific instance
-#   ./run.sh --run-all <agent>   Run agent against all 500 instances
+#   ./run.sh --build [agent]     Build agent bundle(s) only
+#   ./run.sh --rebuild [scope] Rebuild from scratch (--no-cache): all|<agent>
 #   ./run.sh --eval <agent>      Evaluate collected patches (Docker-free, quickstart-style)
 #   ./run.sh --summarize [agent]  Combine and summarize collected results
-#   ./run.sh --interactive       Start interactive container for manual debugging
+#   ./run.sh --status            Show completion status
 #
 # Workflow:
-#   1. --run / --run-all  -> collects patches to outputs/<id>/
-#   2. --eval              -> evaluates collected patches (Docker-free, quickstart-style)
+#   1. ./run.sh --index          (one-time: cache the dataset)
+#   2. ./run.sh --build          (build agent bundles — no Docker images)
+#   3. Harness runs agents using its own images, mounting our bundle at /agent
+#   4. ./run.sh --eval <agent>   (evaluate collected patches, Docker-free)
+#   5. ./run.sh --status         (inspect results)
 # ==============================================================================
 
 set -euo pipefail
-
-# ==============================================================================
-# CLEANUP — remove any containers this script created on exit
-# ==============================================================================
-cleanup() {
-    docker rm -f "$(docker ps -aq --filter 'name=swe_' 2>/dev/null)" 2>/dev/null || true
-}
-trap cleanup EXIT
 
 # ==============================================================================
 # CONFIGURATION
@@ -41,10 +35,6 @@ OUTPUT_DIR="${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}/outputs"
 WORKSPACE_DIR="${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}"
 CACHE_FILE="/tmp/swe_verified_cache.json"
 HF_DATASET="princeton-nlp/SWE-bench_Verified"
-
-# Image names — base image is minimal (bash + git)
-BASE_IMAGE="swe-base"
-# Agent bundles are built into agents/<agent>/bundle/ (self-contained, relocatable)
 
 # ==============================================================================
 # DATASET — fetch and cache from HuggingFace
@@ -97,9 +87,7 @@ sys.exit(1)
 show_help() {
     cat <<EOF
 $(basename "$0") — SWE-bench Orchestrator
-Unified build, index, list, evaluate, and inspect workflow for SWE-bench.
-
-Architecture: Minimal base image + self-contained agent bundle mounted at runtime.
+Self-contained agent bundles mounted into swebench harness images.
 
 USAGE
   $(basename "$0") [COMMAND] [ARGS]
@@ -117,37 +105,25 @@ COMMANDS
       substring match against any field (e.g. a repo name or instance id).
 
   --build [AGENT]
-      Build the base image and agent bundle(s). The shared 'swe-base' image
-      is always built first (minimal: bash + git), then each agent's self-
-      contained bundle is created under agents/<agent>/bundle/.
-      If AGENT is given (e.g. pi, codex), only that agent's bundle is built;
-      otherwise all agent bundles are built. Existing images/bundles are skipped.
+      Build agent bundle(s) only. No Docker images are built.
+      Each agent's self-contained bundle is created under agents/<agent>/bundle/
+      containing Node.js, pi CLI, config files, and entrypoint.sh.
+      If AGENT is given (e.g. pi), only that agent's bundle is built;
+      otherwise all agent bundles are built. Existing bundles are skipped.
 
   --rebuild [SCOPE]
       Always rebuild from scratch (--no-cache) so the latest deps are pulled.
       SCOPE controls what is rebuilt:
-        (none)/all  base image + all agent bundles
-        base        only the shared base image
-        <agent>     only that agent bundle (base NOT rebuilt)
+        (none)/all  all agent bundles
+        <agent>     only that agent bundle
       Use this to upgrade pi or refresh cached layers. Skips nothing.
 
-  --run <AGENT> <INSTANCE_ID>
-      Run an agent against a single instance. AGENT is a folder name under
-      agents/ (e.g. pi, codex, claude). INSTANCE_ID is like django__django-11039.
-      The agent runs inside the base image with its bundle mounted read-only
-      at /agent. Results are written to <workspace>/outputs/<INSTANCE_ID>/.
-
-  --run-all <AGENT>
-      Run an agent against every cached instance (all 500 verified instances),
-      collecting one patch per instance to <workspace>/outputs/<INSTANCE_ID>/.
-      Long-running: consider running in the background.
-
   --eval <AGENT>
-      Evaluate the patches collected for AGENT in a previous --run/--run-all.
+      Evaluate the patches collected for AGENT in a previous run.
       This is a SEPARATE step from the agent "work" step and needs NO Docker
       access. Following the SWE-bench quickstart methodology, for each patch it
       clones the repo at the base commit, applies the model patch + the
-      dataset's test_patch, installs the project in a pyenv venv, and runs the
+      dataset's test_patch, installs the project in a venv, and runs the
       instance's FAIL_TO_PASS and PASS_TO_PASS tests (Django uses
       tests/runtests.py; other repos use pytest). Writes local_eval.json and
       folds the result into result.json. Can be slow (bootstraps each project).
@@ -161,41 +137,23 @@ COMMANDS
       Summarize progress of collected runs: totals plus per-instance status
       (resolved / failed / no patch / unknown) read from result.json files.
 
-  --interactive [AGENT]
-      Start an interactive shell inside the base image with the agent bundle
-      mounted for manual debugging. AGENT defaults to 'pi' if not given.
-
 ENVIRONMENT
   SWE_WORKSPACE_DIR
-      Root of the workspace (default: ./workspace). The outputs directory and
-      shared volume are derived from it:
-        workspace  = \${SWE_WORKSPACE_DIR:-./workspace}
-        outputs    = \$workspace/outputs
-
-WORKFLOW
-  1. ./run.sh --index          (one-time: cache the dataset)
-  2. ./run.sh --build          (one-time: build base image + agent bundles)
-  3. ./run.sh --run <agent> <id>  or  --run-all <agent>   (collect patches)
-  4. ./run.sh --eval <agent>   (evaluate collected patches, Docker-free)
-  5. ./run.sh --status         (inspect results)
+      Root of the workspace (default: ./workspace). The outputs directory is
+      derived from it: outputs = \$workspace/outputs
 
 PREREQUISITES
-  - Docker must be installed and running (used for --build, --run, --run-all,
-    --interactive, and the dataset fetch behind --index/--list).
   - A HuggingFace dataset fetch happens on first --index / --list.
+  - The swebench harness provides the container runtime for running agents.
 
 EXAMPLES
   $(basename "$0") --index
   $(basename "$0") --list "django"
   $(basename "$0") --build
-  $(basename "$0") --rebuild           # force fresh build of base + all bundles (latest pi CLI)
-  $(basename "$0") --rebuild base      # rebuild only the base image
+  $(basename "$0") --rebuild           # force fresh build of all bundles (latest pi CLI)
   $(basename "$0") --rebuild pi        # rebuild only the 'pi' agent bundle
-  $(basename "$0") --run pi django__django-11039
-  $(basename "$0") --run-all pi
   $(basename "$0") --eval pi
   $(basename "$0") --status
-  $(basename "$0") --interactive codex
 EOF
 }
 
@@ -229,10 +187,7 @@ print(f'\nTotal: {len(data)} instances')
 }
 
 # ==============================================================================
-# BUILD — build base image + agent bundle(s)
-#
-# The base image is minimal (bash + git). Agent bundles are self-contained
-# directories with Node.js, pi CLI, and config — mounted read-only at runtime.
+# BUILD — build agent bundle(s) only (no Docker images)
 # ==============================================================================
 do_build() {
     local only_agent="${1:-}"
@@ -244,17 +199,9 @@ do_build() {
         exit 1
     fi
 
-    echo "=== Building Base Image + Agent Bundles ==="
+    echo "=== Building Agent Bundles (no Docker images) ==="
 
-    # Build base image (always built first)
-    if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
-        echo "Building ${BASE_IMAGE}..."
-        docker build -f "${AGENTS_DIR}/base/Dockerfile.base" -t "$BASE_IMAGE" "${AGENTS_DIR}/base/"
-    else
-        echo "${BASE_IMAGE} already exists."
-    fi
-
-    # Build agent bundles (skip 'base' — it's the base image)
+    # Build agent bundles
     for agent_dir in "${AGENTS_DIR}"/*/; do
         [ -d "$agent_dir" ] || continue
         agent_name=$(basename "$agent_dir")
@@ -272,8 +219,7 @@ do_build() {
     done
 
     echo ""
-    echo "=== Built ==="
-    docker images | grep -E "^${BASE_IMAGE}" || true
+    echo "=== Built Bundles ==="
     for agent_dir in "${AGENTS_DIR}"/*/; do
         [ -d "$agent_dir" ] || continue
         agent_name=$(basename "$agent_dir")
@@ -286,10 +232,9 @@ do_build() {
 
 # ==============================================================================
 # REBUILD — always from scratch (--no-cache), scope-controlled by arg:
-#   --rebuild           -> base + all agent bundles (default: 'all')
-#   --rebuild all       -> base + all agent bundles
-#   --rebuild base      -> only the base image
-#   --rebuild <agent>   -> only that agent bundle (base NOT rebuilt)
+#   --rebuild           -> all agent bundles (default: 'all')
+#   --rebuild all       -> all agent bundles
+#   --rebuild <agent>   -> only that agent bundle
 # ==============================================================================
 build_agent_bundle() {
     local agent_dir="$1"
@@ -309,8 +254,8 @@ build_agent_bundle() {
 
 do_rebuild() {
     local scope="${1:-all}"
-    if [ "$scope" != "all" ] && [ "$scope" != "base" ] && [ ! -d "${AGENTS_DIR}/${scope}" ]; then
-        echo "ERROR: Unknown rebuild target '${scope}'. Use 'all', 'base', or an agent name."
+    if [ "$scope" != "all" ] && [ ! -d "${AGENTS_DIR}/${scope}" ]; then
+        echo "ERROR: Unknown rebuild target '${scope}'. Use 'all' or an agent name."
         echo "Available agents:"
         for d in "${AGENTS_DIR}"/*/; do
             [ -d "$d" ] && [ "$(basename "$d")" != "base" ] && echo "  $(basename "$d")"
@@ -320,26 +265,17 @@ do_rebuild() {
 
     echo "=== Rebuilding (--no-cache) ==="
 
-    if [ "$scope" = "base" ]; then
-        # Only the base image
-        echo "Building ${BASE_IMAGE}..."
-        docker build --no-cache -f "${AGENTS_DIR}/base/Dockerfile.base" -t "$BASE_IMAGE" "${AGENTS_DIR}/base/"
-    elif [ "$scope" = "all" ]; then
-        # Base image first, then every agent bundle
-        echo "Building ${BASE_IMAGE}..."
-        docker build --no-cache -f "${AGENTS_DIR}/base/Dockerfile.base" -t "$BASE_IMAGE" "${AGENTS_DIR}/base/"
+    if [ "$scope" = "all" ]; then
         for agent_dir in "${AGENTS_DIR}"/*/; do
             [ -d "$agent_dir" ] || continue
             build_agent_bundle "$agent_dir"
         done
     else
-        # A specific agent only — do NOT rebuild base
         build_agent_bundle "${AGENTS_DIR}/${scope}"
     fi
 
     echo ""
-    echo "=== Built ==="
-    docker images | grep -E "^${BASE_IMAGE}" || true
+    echo "=== Built Bundles ==="
     for agent_dir in "${AGENTS_DIR}"/*/; do
         [ -d "$agent_dir" ] || continue
         agent_name=$(basename "$agent_dir")
@@ -351,103 +287,7 @@ do_rebuild() {
 }
 
 # ==============================================================================
-# RUN — run an agent against a specific instance
-#
-# Container mounts:
-#   /agent    -> agent bundle (read-only) — Node.js + pi CLI + config
-#   /output   -> writable output directory
-#   /workspace/repos -> cached cloned repos (optional, read-write)
-# ==============================================================================
-do_run() {
-    local agent="${1:?Usage: $0 --run <agent> <instance_id>}"
-    local instance_id="${2:?Usage: $0 --run <agent> <instance_id>}"
-
-    # Validate agent exists
-    if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
-        echo "ERROR: Agent '${agent}' not found. Available agents:"
-        for d in "${AGENTS_DIR}"/*/; do
-            [ -d "$d" ] && echo "  $(basename "$d")"
-        done
-        exit 1
-    fi
-
-    # Validate base image exists
-    if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
-        echo "ERROR: Base image '${BASE_IMAGE}' not found. Run './run.sh --build' first."
-        exit 1
-    fi
-
-    # Validate agent bundle exists
-    local bundle_dir="${AGENTS_DIR}/${agent}/bundle"
-    if [ ! -d "$bundle_dir" ]; then
-        echo "ERROR: Agent bundle not found at ${bundle_dir}. Run './run.sh --build ${agent}' first."
-        exit 1
-    fi
-
-    # Get instance data
-    local inst_data
-    inst_data=$(get_instance "$instance_id")
-    local repo_url base_commit problem_statement
-    repo_url=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['repo'])")
-    base_commit=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['base_commit'])")
-    problem_statement=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['problem_statement'])")
-
-    # Run the agent container
-    echo "=============================================================================="
-    echo "Running: ${agent} against ${instance_id}"
-    echo "=============================================================================="
-
-    docker run --rm \
-        --name "swe_${agent}_${instance_id}" \
-        --memory 8g \
-        --memory-swap 8g \
-        --pids-limit 500 \
-        --tmpfs /tmp:rw,noexec,nosuid,size=2g \
-        --cap-drop ALL \
-        --cap-add NET_RAW \
-        --security-opt no-new-privileges:true \
-        --add-host host.docker.internal:host-gateway \
-        -v "${WORKSPACE_DIR}:/workspace:rw" \
-        -v "${bundle_dir}:/agent:ro" \
-        -e "AGENT_BUNDLE_DIR=/agent" \
-        "$BASE_IMAGE" \
-        "${instance_id}" \
-        "https://github.com/${repo_url}" \
-        "${base_commit}" \
-        "${problem_statement}"
-}
-
-# ==============================================================================
-# RUN-ALL — run agent against all instances
-# ==============================================================================
-do_run_all() {
-    local agent="${1:?Usage: $0 --run-all <agent>}"
-
-    # Validate agent exists
-    if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
-        echo "ERROR: Agent '${agent}' not found."
-        exit 1
-    fi
-
-    # Get all instance IDs
-    while read -r instance_id; do
-        do_run "$agent" "$instance_id"
-    done < <(fetch_dataset | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for inst in data:
-    print(inst['instance_id'])
-")
-}
-
-# ==============================================================================
 # EVAL — Docker-free evaluation (SWE-bench quickstart methodology)
-#
-# This is a SEPARATE step from --run (the agent "work" step). For each
-# collected patch it: clones the repo at the base commit, applies the model
-# patch + the dataset's test_patch, installs the project in a pyenv venv, and
-# runs the instance's FAIL_TO_PASS / PASS_TO_PASS tests. It runs on the host
-# (no Docker needed) using the swebench package or direct pytest execution.
 # ==============================================================================
 do_eval() {
     local agent="${1:?Usage: $0 --eval <agent>}"
@@ -472,8 +312,7 @@ do_eval() {
     echo "Evaluating ${#instance_ids[@]} patch(es) for '${agent}' (quickstart-style, no Docker)"
     echo "=============================================================================="
 
-    # Also write predictions.json in the standard SWE-bench format (handy if a
-    # Docker-enabled harness eval is ever run elsewhere).
+    # Also write predictions.json in the standard SWE-bench format
     local preds="${eval_dir}/predictions.json"
     EVAL_DIR="${eval_dir}" AGENT_NAME="${agent}" PREDS="${preds}" python3 -c "
 import sys, json, os
@@ -560,9 +399,6 @@ for d in sorted(glob.glob(os.path.join(eval_dir,'*',''))):
     if not iid: continue
     rp=os.path.join(d,'result.json')
     if not os.path.exists(rp): continue
-    # NOTE: outputs are keyed by instance id (repo-prefixed), not by agent, so
-    # the optional AGENT argument is accepted for compatibility but does not
-    # filter rows here.
     meta=json.load(open(rp))
     rows.append({
       'instance_id': iid,
@@ -585,41 +421,6 @@ for r in rows:
 print(f"\nTotal: {total} | resolved: {resolved} | failed: {failed} | error: {errored} | no_patch: {no_patch}")
 print(f"Summary written to {out_json}")
 PY
-}
-
-# ==============================================================================
-# INTERACTIVE — start interactive container for manual debugging
-# ==============================================================================
-do_interactive() {
-    local agent="${1:-pi}"
-    local bundle_dir="${AGENTS_DIR}/${agent}/bundle"
-
-    if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
-        echo "ERROR: Base image '${BASE_IMAGE}' not found. Run './run.sh --build' first."
-        exit 1
-    fi
-
-    if [ ! -d "$bundle_dir" ]; then
-        echo "ERROR: Agent bundle not found at ${bundle_dir}. Run './run.sh --build ${agent}' first."
-        exit 1
-    fi
-
-    echo "Starting interactive container for '${agent}'..."
-    local DOCKER_RUN="docker run --rm -i"
-    [ -t 0 ] && DOCKER_RUN="$DOCKER_RUN -t"  # allocate TTY only if stdin is a terminal
-    $DOCKER_RUN \
-        --memory 8g \
-        --memory-swap 8g \
-        --pids-limit 500 \
-        --tmpfs /tmp:rw,noexec,nosuid,size=2g \
-        --cap-drop ALL \
-        --cap-add NET_RAW \
-        --security-opt no-new-privileges:true \
-        --add-host host.docker.internal:host-gateway \
-        -v "${WORKSPACE_DIR}:/workspace:rw" \
-        -v "${bundle_dir}:/agent:ro" \
-        -e "AGENT_BUNDLE_DIR=/agent" \
-        "$BASE_IMAGE" --interactive
 }
 
 # ==============================================================================
@@ -685,12 +486,6 @@ case "$1" in
     --rebuild)
         do_rebuild "${2:-}"
         ;;
-    --run)
-        do_run "${2:-}" "${3:-}"
-        ;;
-    --run-all)
-        do_run_all "${2:-}"
-        ;;
     --eval)
         do_eval "${2:-}"
         ;;
@@ -699,9 +494,6 @@ case "$1" in
         ;;
     --status)
         do_status
-        ;;
-    --interactive|-i)
-        do_interactive "${2:-pi}"
         ;;
     *)
         echo "Unknown option: $1"

@@ -6,7 +6,7 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
    - [x] Remove any build stages or multi-stage references that depended on it
    - [x] Verify nothing else in the repo references it (grep -r)
    - [x] Commit cleanup
-   - **New architecture:** Minimal base image (bash+git) + self-contained agent bundles mounted at runtime
+   - **New architecture:** No Docker images built — swebench harness provides container runtime, we provide self-contained agent bundles mounted at /agent
 
 2. [x] Refactor `--build pi` into a self-contained agent bundle
    - [x] Audit current `--build pi` — what does it do today? (read script)

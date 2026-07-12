@@ -1,27 +1,25 @@
 #!/bin/bash
 # ==============================================================================
-# SWE-bench Agent Entrypoint — runs the pi coding agent inside a container.
+# SWE-bench Agent Entrypoint — runs the pi coding agent.
 #
-# This version works with a self-contained agent bundle mounted at /agent.
-# All outputs go to /output/[instance_id]/.
+# Works with a self-contained agent bundle mounted at /agent by the swebench
+# harness. All outputs go to /output/[instance_id]/.
 #
 # Usage:
 #   /entrypoint.sh --interactive          Drop into interactive shell
 #   /entrypoint.sh <instance_id> <repo_url> <base_commit> <problem_statement>
 #
-# Container mounts:
-#   /agent    → agent bundle (read-only) — contains Node.js + pi CLI + config
+# The swebench harness provides the container runtime and mounts:
+#   /agent    → agent bundle (read-only) — Node.js + pi CLI + config
 #   /output   → writable output directory
 #   /workspace/repos → cached cloned repos (optional, read-write)
 # ==============================================================================
 
 set -euo pipefail
 
-# --- Locate the agent bundle ---
-AGENT_BUNDLE="${AGENT_BUNDLE_DIR:-/agent}"
+AGENT_BUNDLE="/agent"
 if [ ! -d "${AGENT_BUNDLE}" ]; then
     echo "ERROR: Agent bundle not found at ${AGENT_BUNDLE}"
-    echo "  Make sure it's mounted read-only at /agent"
     exit 1
 fi
 
