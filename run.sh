@@ -354,6 +354,18 @@ instance_to_image() {
 # Spins up the swebench eval image for this instance, mounts our agent bundle
 # read-only at /agent, and calls entrypoint.sh inside it.
 # ==============================================================================
+DOCKER_RUN_FLAGS=(
+    --memory 8g
+    --memory-swap 16g
+    --pids-limit 500
+    --tmpfs /tmp:rw,noexec,nosuid,size=2g
+    --read-only
+    --cap-drop ALL
+    --security-opt no-new-privileges:true
+    --add-host host.docker.internal:host-gateway
+    -u 1001:1001
+)
+
 do_run() {
     local agent="${1:?Usage: $0 --run <agent> <instance_id>}"
     local instance_id="${2:?Usage: $0 --run <agent> <instance_id>}"
@@ -400,15 +412,7 @@ do_run() {
 
     docker run \
         --name "swe_${agent}_${instance_id}" \
-        --memory 8g \
-        --memory-swap 16g \
-        --pids-limit 500 \
-        --tmpfs /tmp:rw,noexec,nosuid,size=2g \
-        --read-only \
-        --cap-drop ALL \
-        --security-opt no-new-privileges:true \
-        --add-host host.docker.internal:host-gateway \
-        -u 1001:1001 \
+        "${DOCKER_RUN_FLAGS[@]}" \
         -v "${WORKSPACE_DIR}:/workspace:rw" \
         -v "${bundle_dir}:/agent:ro" \
         "$image_name" \
@@ -457,24 +461,26 @@ do_run_all() {
         if [ -n "$timeout_sec" ]; then
             # Run detached with cidfile so timeout can kill the container
             local cidfile="/tmp/swe_${agent}_${instance_id}.cid"
+            local image_name
+            image_name=$(instance_to_image "$instance_id")
+            local inst_data repo_url base_commit problem_statement
+            inst_data=$(get_instance "$instance_id")
+            repo_url=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['repo'])")
+            base_commit=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['base_commit'])")
+            problem_statement=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['problem_statement'])")
+
             docker run --rm \
                 --name "swe_${agent}_${instance_id}" \
-                --memory 8g --memory-swap 16g --pids-limit 500 \
-                --tmpfs /tmp:rw,noexec,nosuid,size=2g \
-                --read-only \
-                --cap-drop ALL \
-                --security-opt no-new-privileges:true \
-                --add-host host.docker.internal:host-gateway \
-                -u 1001:1001 \
+                "${DOCKER_RUN_FLAGS[@]}" \
                 -v "${WORKSPACE_DIR}:/workspace:rw" \
                 -v "${AGENTS_DIR}/${agent}/bundle:/agent:ro" \
                 --cidfile "$cidfile" \
-                "$(instance_to_image "$instance_id")" \
+                "$image_name" \
                 /agent/entrypoint.sh \
                 "${instance_id}" \
-                "$(get_instance "$instance_id" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['repo'])")" \
-                "$(get_instance "$instance_id" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['base_commit'])")" \
-                "$(get_instance "$instance_id" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['problem_statement'])")" &
+                "https://github.com/${repo_url}" \
+                "${base_commit}" \
+                "${problem_statement}" &
             DOCKER_PID=$!
             if ! timeout "${timeout_sec}" bash -c "wait $DOCKER_PID" 2>/dev/null; then
                 # Timeout expired — kill the container
@@ -566,23 +572,31 @@ print(f'Wrote {len(results)} predictions to {os.environ[\"PREDS\"]}')
     "${SWEBENCH_PY}" -c "
 import json, os, glob
 report_dir = os.environ['EVAL_DIR']
-# swebench writes all_preds.json with instance_id -> status mapping
-preds_file = os.path.join(report_dir, 'all_preds.json')
-if not os.path.exists(preds_file):
-    print('WARNING: all_preds.json not found, skipping fold')
+# swebench writes aggregate report to CWD as <model>__<run_id>.json
+# e.g. pi__pi.json with resolved_ids, unresolved_ids, error_ids lists
+cands = glob.glob(os.path.join(report_dir, '*.json')) + glob.glob('*__*.json')
+rep = None
+for c in cands:
+    try:
+        d = json.load(open(c))
+        if 'resolved_ids' in d and 'unresolved_ids' in d:
+            rep = d; break
+    except Exception:
+        pass
+if not rep:
+    print('WARNING: swebench report not found, skipping fold')
     exit(0)
-preds = json.load(open(preds_file))
-for iid, pred in preds.items():
-    result_file = os.path.join(report_dir, iid, 'result.json')
-    if not os.path.exists(result_file):
-        continue
-    meta = json.load(open(result_file))
-    # swebench verdict is in pred['resolved'] (bool)
-    resolved = pred.get('resolved', False)
-    meta['local_eval'] = 'resolved' if resolved else 'failed'
-    meta['status'] = 'resolved' if resolved else 'failed'
-    json.dump(meta, open(result_file, 'w'), indent=2)
-print(f'Folded results for {len(preds)} instances')
+resolved = set(rep.get('resolved_ids', []))
+errored  = set(rep.get('error_ids', []))
+for iid in set(resolved) | set(rep.get('unresolved_ids', [])) | errored:
+    rf = os.path.join(report_dir, iid, 'result.json')
+    if not os.path.exists(rf): continue
+    meta = json.load(open(rf))
+    if iid in resolved:   meta['local_eval'] = 'resolved'; meta['status'] = 'resolved'
+    elif iid in errored:  meta['local_eval'] = 'error';    meta['status'] = 'error'
+    else:                 meta['local_eval'] = 'failed';    meta['status'] = 'failed'
+    json.dump(meta, open(rf, 'w'), indent=2)
+print(f'Folded results for {len(resolved) + len(errored)} instances')
 " EVAL_DIR="${eval_dir}"
 }
 
