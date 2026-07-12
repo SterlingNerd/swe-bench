@@ -647,8 +647,7 @@ do_interactive() {
         -u 1001:1001 \
         -v "${WORKSPACE_DIR}:/workspace:rw" \
         -v "${AGENTS_DIR}/pi/bundle:/agent:ro" \
-        -v "${AGENTS_DIR}/pi/bundle/.pi:/workspace/.pi:rw" \
-        "$image_name" bash
+        "$image_name" /agent/entrypoint.sh --interactive
 }
 
 # ==============================================================================
