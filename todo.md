@@ -1,12 +1,12 @@
 We're pivoting this project setup to be simpler. Use this `todo.md` as a checklist to keep working until done. Add sub-tasks as needed. Occasionally remind yourself you're working from this file so it's context doesn't get lost. Commit after each primary task. If you are unsure, try to follow best practices. If you're still unsure, add a discussion note to the bottom of `todo.md` and continue with your best judgement if possible.
 
-1. [x] Remove swe-base image and all references (We're replacing swe-base with swebench/sweb.env images)
-   - [x] `docker rmi` the swe-base image locally
-   - [x] Search for `swe-base` in Dockerfile(s), docker-compose, Makefile, scripts
+1. [x] Remove swe-base image and all references
+   - [x] docker rmi the swe-base image locally
+   - [x] Search for swe-base in Dockerfile(s), docker-compose, Makefile, scripts
    - [x] Remove any build stages or multi-stage references that depended on it
    - [x] Verify nothing else in the repo references it (grep -r)
    - [x] Commit cleanup
-   - **New architecture:** No Docker images built by us — we use swebench eval images (swebench/sweb.eval.x86_64.<repo>_1776_<issue>:latest), mount our agent bundle at /agent, call entrypoint.sh inside
+   - **New architecture:** No Docker images built — we use swebench eval images, mount our agent bundle at /agent, call entrypoint.sh inside
 
 2. [x] Refactor `--build pi` into a self-contained agent bundle
    - [x] Audit current `--build pi` — what does it do today? (read script)
@@ -27,7 +27,6 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
    - [x] Verify the swebench/sweb/env container has everything needed (bash, git, etc.)
    - [x] Handle multiple architectures if needed (x86_64 vs aarch64)
    - [x] Test: can the container see `/agent` (ro) and write to `/output`?
-   - **Implementation:** run.sh --run spins up swebench eval image, mounts bundle at /agent, calls entrypoint.sh
 
 4. [x] Pass inference URL so pi can connect inside the container
    - [x] Use pre-baked `models.json` + `auth.json` in the agent bundle (no secrets to worry about)
@@ -62,17 +61,36 @@ We're pivoting this project setup to be simpler. Use this `todo.md` as a checkli
      - any pi debug logs or state files
    - [x] Ensure these don't interfere with the eval step (different filenames/extensions)
 
-8. [x] Eval step: convert outputs → SWE-bench prediction JSONL → run harness
-   - [x] Read the [SWE-bench eval guide](https://www.swebench.com/SWE-bench/guides/evaluation/) carefully
-   - [x] Design the conversion:
-     - Scan `/output/[repo__num]/` dirs for `patch.diff` files per instance
-     - Map each patch to a JSONL entry with `instance_id`, `model_patch`
-   - [x] Write the prediction JSONL file (standard SWE-bench format)
-   - [ ] Run SWE-bench eval harness against it
+8. [ ] Eval step: convert outputs → SWE-bench prediction JSONL → run harness
+   - [ ] Install swebench package (`pip install swebench`) if not present — add `./run.sh --init` for this
+   - [ ] Read the [SWE-bench eval guide](https://www.swebench.com/SWE-bench/guides/evaluation/) carefully
+   - [ ] Design the conversion:
+     - Scan `/workspace/outputs/[repo__num]/` dirs for `patch.diff` files per instance
+     - Map each patch to SWE-bench prediction format (JSONL with instance_id, model_patch)
+   - [ ] Call official swebench eval harness (not reimplement)
    - [ ] Parse and summarize results (pass/fail, test outcomes)
    - [ ] Consider making this a single `./eval.sh` script for reproducibility
 
-9. [x] Re-discuss inference URL configuration once the rest is working
+9. [ ] Re-discuss inference URL configuration once the rest is working
    - [x] Current: hardcoded `http://host.docker.internal:11434/v1` in pre-baked models.json
    - [ ] Future: allow overriding via env var / config for different providers (Anthropic, OpenRouter, etc.)
    - [ ] Decide: baked config per-provider? env var override? runtime rewrite?
+
+────────────────────────────────────────────────────────────────────────────────
+### BLOCKING BUGS FROM REVIEW (fix these first)
+
+B. [ ] Fix pi working directory — cd into repo before running pi, git diff from there
+C. [ ] Fix pi config discovery — use PI_CODING_AGENT_DIR=/tmp/.pi/agent or restructure .pi layout
+E. [ ] Fix uid 1001 write paths — ensure outputs are writable by container user
+D. [ ] Stop swallowing errors — remove `|| true` on critical commands, surface real failures
+
+────────────────────────────────────────────────────────────────────────────────
+### SECURITY & CLEANUP (fix after blocking bugs)
+
+S1. [ ] Remove --cap-add NET_RAW (unnecessary)
+S2. [ ] Fix memory-swap: either increase it or remove the misleading README claim
+S3. [ ] Make root filesystem --read-only in container
+S4. [ ] Fix cleanup() trap — only kill containers this script created (use labels or name prefix)
+S5. [ ] Pin pi-coding-agent version in build_bundle.sh (not @latest)
+S6. [ ] Remove Dockerfile.pi (already deleted by user, verify)
+S7. [ ] .pi layout: ensure .pi/agent/ subfolder exists for PI_CODING_AGENT_DIR

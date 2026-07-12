@@ -29,10 +29,13 @@
 set -euo pipefail
 
 # ==============================================================================
-# CLEANUP — remove any containers this script created on exit
+# CLEANUP — remove containers this script created (by name prefix)
 # ==============================================================================
+CLEANUP_IDS=()
 cleanup() {
-    docker rm -f "$(docker ps -aq --filter 'name=swe_' 2>/dev/null)" 2>/dev/null || true
+    for cid in "${CLEANUP_IDS[@]}"; do
+        docker rm -f "$cid" 2>/dev/null || true
+    done
 }
 trap cleanup EXIT
 
@@ -392,14 +395,14 @@ do_run() {
     echo "Image: ${image_name}"
     echo "=============================================================================="
 
-    docker run --rm \
+    CONTAINER_ID=$(docker run --rm \
         --name "swe_${agent}_${instance_id}" \
         --memory 8g \
-        --memory-swap 8g \
+        --memory-swap 16g \
         --pids-limit 500 \
         --tmpfs /tmp:rw,noexec,nosuid,size=2g \
+        --read-only \
         --cap-drop ALL \
-        --cap-add NET_RAW \
         --security-opt no-new-privileges:true \
         --add-host host.docker.internal:host-gateway \
         -u 1001:1001 \
@@ -410,7 +413,8 @@ do_run() {
         "${instance_id}" \
         "https://github.com/${repo_url}" \
         "${base_commit}" \
-        "${problem_statement}"
+        "${problem_statement}")
+    CLEANUP_IDS+=("$CONTAINER_ID")
 }
 
 # ==============================================================================
@@ -637,11 +641,11 @@ do_interactive() {
     [ -t 0 ] && DOCKER_RUN="$DOCKER_RUN -t"
     $DOCKER_RUN \
         --memory 8g \
-        --memory-swap 8g \
+        --memory-swap 16g \
         --pids-limit 500 \
         --tmpfs /tmp:rw,noexec,nosuid,size=2g \
+        --read-only \
         --cap-drop ALL \
-        --cap-add NET_RAW \
         --security-opt no-new-privileges:true \
         --add-host host.docker.internal:host-gateway \
         -u 1001:1001 \

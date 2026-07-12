@@ -18,6 +18,7 @@ BUNDLE_DIR="${1:-${SCRIPT_DIR}/bundle}"
 NODE_VERSION="22.14.0"
 FD_VERSION="10.2.0"
 RG_VERSION="15.0.0"
+PI_VERSION="0.80.6"
 
 echo "=== Building pi agent bundle ==="
 echo "Output: ${BUNDLE_DIR}"
@@ -67,9 +68,9 @@ echo "Node.js: $(node --version)"
 echo "npm: $(npm --version)"
 
 # --- Install pi CLI locally in bundle ---
-echo "Installing pi coding agent..."
+echo "Installing pi coding agent v${PI_VERSION}..."
 cd "${BUNDLE_DIR}"
-npm install --ignore-scripts "@earendil-works/pi-coding-agent@latest" 2>&1 | tail -3
+npm install --ignore-scripts "@earendil-works/pi-coding-agent@${PI_VERSION}" 2>&1 | tail -3
 
 # Create a wrapper script for pi that uses the bundled node
 # Note: node_modules is at BUNDLE_DIR level, not bin/ level
@@ -80,10 +81,10 @@ exec "${SCRIPT_DIR}/bin/node" "${SCRIPT_DIR}/node_modules/@earendil-works/pi-cod
 WRAPPER
 chmod +x "${BUNDLE_DIR}/bin/pi"
 
-# --- Copy config files ---
+# --- Copy config files into .pi/agent/ layout ---
 echo "Copying config files..."
 PI_SRC="${SCRIPT_DIR}/.pi"
-AGENT_DIR="${BUNDLE_DIR}/.pi"
+AGENT_DIR="${BUNDLE_DIR}/.pi/agent"
 mkdir -p "${AGENT_DIR}"
 
 if [ -f "${PI_SRC}/settings.json" ]; then
@@ -98,6 +99,7 @@ fi
 
 # Copy npm packages (loop-police, etc.)
 if [ -d "${PI_SRC}/npm" ]; then
+    mkdir -p "${AGENT_DIR}/npm"
     cp -r "${PI_SRC}/npm/"* "${AGENT_DIR}/npm/" 2>/dev/null || true
 fi
 

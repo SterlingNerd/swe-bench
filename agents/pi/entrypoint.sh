@@ -23,27 +23,29 @@ if [ ! -d "${AGENT_BUNDLE}" ]; then
 fi
 
 # --- Setup writable config dir ---
-# Copy .pi config from read-only bundle to a writable location
-# pi looks for .pi in HOME, so set HOME=/tmp and put .pi there
-mkdir -p /tmp/.pi
-if [ -d "${AGENT_BUNDLE}/.pi" ]; then
-    cp -r "${AGENT_BUNDLE}/.pi/"* /tmp/.pi/ 2>/dev/null || true
+# pi looks for config via PI_CODING_AGENT_DIR pointing to .pi/agent/
+# Bundle has .pi/agent/ with settings.json, models.json, auth.json
+PI_CONFIG_DIR="/tmp/.pi/agent"
+mkdir -p "${PI_CONFIG_DIR}"
+if [ -d "${AGENT_BUNDLE}/.pi/agent" ]; then
+    cp -r "${AGENT_BUNDLE}/.pi/agent/"* "${PI_CONFIG_DIR}/" 2>/dev/null || true
 fi
 
 # --- Setup paths ---
-OUTPUT_DIR="/testbed/outputs/${INSTANCE_ID:-unknown}"
-REPOS_DIR="/testbed/repos"
+OUTPUT_DIR="/workspace/outputs/${INSTANCE_ID:-unknown}"
+REPOS_DIR="/workspace/repos"
 NODE_BIN="${AGENT_BUNDLE}/bin"
 
 export PATH="${NODE_BIN}:${PATH}"
 export HOME="/tmp"
+export PI_CODING_AGENT_DIR="${PI_CONFIG_DIR}"
 
 echo "=============================================================================="
 echo "SWE-bench Agent: ${INSTANCE_ID:-unknown}"
 echo "Agent bundle: ${AGENT_BUNDLE}"
 echo "Node.js: $(node --version 2>/dev/null || echo 'not found')"
 echo "pi CLI:  $(pi --version 2>/dev/null || echo 'not found')"
-echo "Config:  ${PI_CONFIG_DIR}/"
+echo "Config:  ${PI_CODING_AGENT_DIR}/"
 echo "=============================================================================="
 
 # Interactive mode: drop into shell for debugging
@@ -58,7 +60,6 @@ BASE_COMMIT="${3:?Missing base_commit}"
 PROBLEM_STATEMENT="${4:?Missing problem_statement}"
 
 # --- Setup output dir ---
-OUTPUT_DIR="/testbed/outputs/${INSTANCE_ID}"
 mkdir -p "${OUTPUT_DIR}/eval"
 
 # Verification: write hello world
@@ -81,28 +82,30 @@ if [ ! -d "$REPO_DIR" ]; then
     git clone "${REPO_URL_CLEAN}.git" "$REPO_DIR" 2>&1 | tail -1
 fi
 
-cd "$REPO_DIR" && git checkout "$BASE_COMMIT" >/dev/null 2>&1
-cd - >/dev/null
+# cd into the repo — pi needs to run inside the codebase
+cd "$REPO_DIR" || { echo "ERROR: Cannot cd to $REPO_DIR"; exit 1; }
+git checkout "$BASE_COMMIT" || { echo "ERROR: Cannot checkout $BASE_COMMIT"; exit 1; }
 
-# Run the agent using the bundled pi CLI
-echo "  Running agent..."
+# Run the agent using the bundled pi CLI (from inside the repo)
+echo "  Running agent in $REPO_DIR..."
 START_TIME=$(date +%s)
 AGENT_OUTPUT="${OUTPUT_DIR}/agent_output.txt"
 
-pi -p --session-dir /tmp/pi-sessions "${PROBLEM_STATEMENT}" 2>&1 | tee "${AGENT_OUTPUT}" || true
+pi -p --session-dir /tmp/pi-sessions "${PROBLEM_STATEMENT}" 2>&1 | tee "${AGENT_OUTPUT}" || {
+    echo "  WARNING: pi exited with non-zero status"
+}
 
 # Save session file if it exists
 if [ -d "/tmp/pi-sessions/${INSTANCE_ID}" ]; then
     cp "/tmp/pi-sessions/${INSTANCE_ID}/session.jsonl" "${OUTPUT_DIR}/session.jsonl" 2>/dev/null || true
 fi
 
-# Extract patch via git diff
+# Extract patch via git diff (from inside the repo)
 echo "  Extracting patch..."
-cd "$REPO_DIR" && git diff > "${OUTPUT_DIR}/patch.diff" 2>/dev/null || true
-cd - >/dev/null
-
-# Also write patch to /testbed/patch.diff for swebench harness
-cp "${OUTPUT_DIR}/patch.diff" /testbed/patch.diff 2>/dev/null || true
+git diff > "${OUTPUT_DIR}/patch.diff" 2>/dev/null || {
+    echo "  WARNING: git diff failed"
+    touch "${OUTPUT_DIR}/patch.diff"
+}
 
 PATCH_SIZE=$(wc -c < "${OUTPUT_DIR}/patch.diff" 2>/dev/null || echo 0)
 
