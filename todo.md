@@ -1,6 +1,6 @@
-We're pivoting this project setup to be simpler. Use this `todo.md` as a checklist to keep working until done. Add sub-tasks as needed. Occasionally remind yourself you're working from this file so it's context doesn't get lost. 
+We're pivoting this project setup to be simpler. Use this `todo.md` as a checklist to keep working until done. Add sub-tasks as needed. Occasionally remind yourself you're working from this file so it's context doesn't get lost. Commit after each primary task. If you are unsure, try to follow best practices. If you're still unsure, add a discussion note to the bottom of `todo.md` and continue with your best judgement if possible.
 
-1. [ ] Remove swe-base image and all references
+1. [ ] Remove swe-base image and all references (We're replacing swe-base with swebench/sweb.env images)
    - [ ] `docker rmi` the swe-base image locally
    - [ ] Search for `swe-base` in Dockerfile(s), docker-compose, Makefile, scripts
    - [ ] Remove any build stages or multi-stage references that depended on it
