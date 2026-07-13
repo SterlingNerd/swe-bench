@@ -51,6 +51,11 @@ SWEBENCH_REGISTRY="swebench"
 # Storage management (percentage threshold to trigger cleanup)
 MAX_STORAGE_PCT=${MAX_STORAGE_PCT:-80}
 
+# SWE-bench registry directory (for Docker images on NAS/external storage)
+# Set this to a path on your NAS to avoid filling local disk
+# Example: export SWEBENCH_REGISTRY_DIR=/mnt/starcluster/documents/swe-bench-docker
+SWEBENCH_REGISTRY_DIR=${SWEBENCH_REGISTRY_DIR:-}
+
 # ==============================================================================
 # STORAGE — check and cleanup disk usage
 # ==============================================================================
@@ -205,6 +210,14 @@ COMMANDS
       space is running low (default threshold: 80%).
 
 ENVIRONMENT
+  SWEBENCH_REGISTRY_DIR
+      Path to store swebench Docker images (e.g., on NAS). Requires Docker
+      daemon.json data-root configuration. Example:
+        export SWEBENCH_REGISTRY_DIR=/mnt/starcluster/documents/swe-bench-docker
+        # Then add to /etc/docker/daemon.json:
+        # { "data-root": "/mnt/starcluster/documents/swe-bench-docker" }
+  MAX_STORAGE_PCT
+      Disk usage percentage threshold to trigger cleanup warning (default: 80)
   SWE_WORKSPACE_DIR
       Root of the workspace (default: ./workspace). The outputs directory is
       derived from it: outputs = \$workspace/outputs
