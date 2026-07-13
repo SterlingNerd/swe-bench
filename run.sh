@@ -596,7 +596,19 @@ for iid in set(resolved) | set(rep.get('unresolved_ids', [])) | errored:
     rf = os.path.join(report_dir, iid, 'result.json')
     if not os.path.exists(rf): continue
     try:
-        meta = json.load(open(rf))
+        # Read existing meta (preserve patch_bytes, elapsed_seconds)
+        old_meta = {}
+        if os.path.exists(rf):
+            try:
+                old_meta = json.load(open(rf))
+            except Exception:
+                pass
+            os.unlink(rf)
+        meta = {
+            'status': old_meta.get('status', 'patch_collected'),
+            'patch_bytes': old_meta.get('patch_bytes', 0),
+            'elapsed_seconds': old_meta.get('elapsed_seconds', 0)
+        }
         if iid in resolved:   meta['local_eval'] = 'resolved'; meta['status'] = 'resolved'
         elif iid in errored:  meta['local_eval'] = 'error';    meta['status'] = 'error'
         else:                 meta['local_eval'] = 'failed';    meta['status'] = 'failed'
