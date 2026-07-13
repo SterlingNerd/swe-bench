@@ -31,9 +31,18 @@ if [ -d "${AGENT_BUNDLE}/.pi/agent" ]; then
     cp -r "${AGENT_BUNDLE}/.pi/agent/"* "${PI_CONFIG_DIR}/" 2>/dev/null || true
 fi
 
+# --- Read instance_id from first arg (before using it) ---
+# Interactive mode: drop into shell for debugging (check before consuming $1)
+if [ "${1:-}" = "--interactive" ]; then
+    echo "Starting interactive shell..."
+    exec bash
+fi
+
+INSTANCE_ID="${1:?Usage: $0 <instance_id> <repo_url> <base_commit> <problem_statement>}"
+
 # --- Setup paths ---
-OUTPUT_DIR="/workspace/outputs/${INSTANCE_ID:-unknown}"
-REPOS_DIR="/workspace/repos"
+OUTPUT_DIR="/workspace/outputs/${INSTANCE_ID}"
+REPOS_DIR="/tmp/repos"
 NODE_BIN="${AGENT_BUNDLE}/bin"
 
 export PATH="${NODE_BIN}:${PATH}"
@@ -41,20 +50,12 @@ export HOME="/tmp"
 export PI_CODING_AGENT_DIR="${PI_CONFIG_DIR}"
 
 echo "=============================================================================="
-echo "SWE-bench Agent: ${INSTANCE_ID:-unknown}"
+echo "SWE-bench Agent: ${INSTANCE_ID}"
 echo "Agent bundle: ${AGENT_BUNDLE}"
 echo "Node.js: $(node --version 2>/dev/null || echo 'not found')"
 echo "pi CLI:  $(pi --version 2>/dev/null || echo 'not found')"
 echo "Config:  ${PI_CODING_AGENT_DIR}/"
 echo "=============================================================================="
-
-# Interactive mode: drop into shell for debugging
-if [ "${1:-}" = "--interactive" ]; then
-    echo "Starting interactive shell..."
-    exec bash
-fi
-
-INSTANCE_ID="${1:?Usage: $0 <instance_id> <repo_url> <base_commit> <problem_statement>}"
 REPO_URL="${2:?Missing repo_url}"
 BASE_COMMIT="${3:?Missing base_commit}"
 PROBLEM_STATEMENT="${4:?Missing problem_statement}"
@@ -77,21 +78,9 @@ json.dump(meta, open(sys.argv[4], 'w'))
 " "${INSTANCE_ID}" "${REPO_URL}" "${BASE_COMMIT}" "${OUTPUT_DIR}/meta.json"
 echo "${PROBLEM_STATEMENT}" > "${OUTPUT_DIR}/problem_statement.txt"
 
-# Clone repo at base commit
-REPO_NAME=$(echo "${REPO_URL}" | sed 's|https://github.com/||; s|\.git$||')
-REPO_DIR="${REPOS_DIR}/${REPO_NAME}"
-
-if [ ! -d "$REPO_DIR" ]; then
-    echo "  Cloning ${REPO_NAME} @ ${BASE_COMMIT:0:8}..."
-    mkdir -p "${REPOS_DIR}"
-    REPO_URL_CLEAN=$(echo "${REPO_URL}" | sed 's/\.git$//')
-    git clone "${REPO_URL_CLEAN}.git" "$REPO_DIR" 2>&1 | tail -1
-fi
-
-# cd into the repo — pi needs to run inside the codebase
+# Use swebench's /testbed (repo already at base commit)
+REPO_DIR="/testbed"
 cd "$REPO_DIR" || { echo "ERROR: Cannot cd to $REPO_DIR"; exit 1; }
-git reset --hard "$BASE_COMMIT" || { echo "ERROR: Cannot reset to $BASE_COMMIT"; exit 1; }
-git clean -fdx || true  # remove any leftover files from prior runs
 
 # Run the agent using the bundled pi CLI (from inside the repo)
 echo "  Running agent in $REPO_DIR..."

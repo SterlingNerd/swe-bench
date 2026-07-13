@@ -359,11 +359,9 @@ DOCKER_RUN_FLAGS=(
     --memory-swap 16g
     --pids-limit 500
     --tmpfs /tmp:rw,noexec,nosuid,size=2g
-    --read-only
     --cap-drop ALL
     --security-opt no-new-privileges:true
     --add-host host.docker.internal:host-gateway
-    -u 1001:1001
 )
 
 do_run() {
@@ -403,6 +401,10 @@ do_run() {
         echo "Pulling swebench image: ${image_name}..."
         docker pull "$image_name" 2>&1 | tail -3
     fi
+
+    # Pre-create output directory writable by container uid 1001
+    mkdir -p "${OUTPUT_DIR}/${instance_id}"
+    chmod 777 "${OUTPUT_DIR}/${instance_id}"
 
     # Run the agent container
     echo "=============================================================================="
