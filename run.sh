@@ -463,6 +463,9 @@ do_run_all() {
         fi
         count=$((count + 1))
         if [ -n "$timeout_sec" ]; then
+            # Pre-create output directory
+            mkdir -p "${OUTPUT_DIR}/${instance_id}"
+            chmod 777 "${OUTPUT_DIR}/${instance_id}"
             # Run detached with cidfile so timeout can kill the container
             local cidfile="/tmp/swe_${agent}_${instance_id}.cid"
             local image_name
@@ -638,7 +641,10 @@ for d in sorted(glob.glob(os.path.join(eval_dir,'*',''))):
     if not iid: continue
     rp=os.path.join(d,'result.json')
     if not os.path.exists(rp): continue
-    meta=json.load(open(rp))
+    try:
+        meta=json.load(open(rp))
+    except (json.JSONDecodeError, ValueError):
+        continue
     rows.append({
       'instance_id': iid,
       'status': meta.get('status'),
