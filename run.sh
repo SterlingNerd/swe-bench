@@ -145,9 +145,11 @@ COMMANDS
       bundle read-only at /agent, and calls entrypoint.sh inside it.
       Results are written to <workspace>/outputs/<INSTANCE_ID>/.
 
-  --run-all <AGENT>
+  --run-all <AGENT> [--timeout N] [--resume]
       Run an agent against every cached instance (all 500 verified instances),
       collecting one patch per instance to <workspace>/outputs/<INSTANCE_ID>/.
+      --timeout N  Kill containers exceeding N seconds (default: 3600 = 1 hour)
+      --resume     Skip instances that already have a result.json
       Long-running: consider running in the background.
 
   --eval <AGENT>
@@ -429,14 +431,14 @@ do_run() {
 # RUN-ALL — run agent against all instances
 #
 # Usage: ./run.sh --run-all <agent> [--timeout <seconds>] [--resume]
-#   --timeout N  Skip instances that took longer than N seconds (default: no limit)
+#   --timeout N  Kill containers that exceed N seconds (default: 3600 = 1 hour)
 #   --resume     Skip instances that already have a result.json
 # ==============================================================================
 do_run_all() {
     local agent="${1:?Usage: $0 --run-all <agent> [--timeout N] [--resume]}"
     shift
 
-    local timeout_sec="" resume=0
+    local timeout_sec="3600" resume=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --timeout) timeout_sec="${2:?--timeout requires a number}"; shift 2 ;;

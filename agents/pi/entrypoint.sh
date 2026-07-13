@@ -86,18 +86,12 @@ cd "$REPO_DIR" || { echo "ERROR: Cannot cd to $REPO_DIR"; exit 1; }
 echo "  Running agent in $REPO_DIR..."
 START_TIME=$(date +%s)
 AGENT_OUTPUT="${OUTPUT_DIR}/agent_output.txt"
+SESSION_DIR="${OUTPUT_DIR}/pi-sessions"
+mkdir -p "${SESSION_DIR}"
 
-pi -p --session-dir /tmp/pi-sessions "${PROBLEM_STATEMENT}" 2>&1 | tee "${AGENT_OUTPUT}" || {
+pi -p --session-dir "${SESSION_DIR}" "${PROBLEM_STATEMENT}" 2>&1 | tee "${AGENT_OUTPUT}" || {
     echo "  WARNING: pi exited with non-zero status"
 }
-
-# Save session files (pi names sessions by UUID, not instance_id)
-# Copy all session files found — at least one should match this run
-if [ -d "/tmp/pi-sessions" ]; then
-    for sf in /tmp/pi-sessions/*/session.jsonl; do
-        [ -f "$sf" ] && cp "$sf" "${OUTPUT_DIR}/session.jsonl" 2>/dev/null && break
-    done
-fi
 
 # Extract patch via git diff (from inside the repo)
 # Must stage new/untracked files first — git diff alone drops them
