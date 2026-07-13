@@ -48,6 +48,30 @@ HF_DATASET="princeton-nlp/SWE-bench_Verified"
 # SWE-bench image registry
 SWEBENCH_REGISTRY="swebench"
 
+# Storage management (percentage threshold to trigger cleanup)
+MAX_STORAGE_PCT=${MAX_STORAGE_PCT:-80}
+
+# ==============================================================================
+# STORAGE — check and cleanup disk usage
+# ==============================================================================
+check_storage() {
+    local usage_pct
+    usage_pct=$(df --output=pcent "${REPO_ROOT}" 2>/dev/null | tail -1 | tr -d ' %')
+    if [ "${usage_pct:-0}" -ge "${MAX_STORAGE_PCT}" ]; then
+        echo "WARNING: Disk at ${usage_pct}% (threshold: ${MAX_STORAGE_PCT}%)"
+        return 1
+    fi
+    return 0
+}
+
+do_cleanup() {
+    echo "=== Cleaning up Docker resources ==="
+    docker stop $(docker ps -q) 2>/dev/null || true
+    docker rm -f $(docker ps -aq) 2>/dev/null || true
+    docker rmi $(docker images -q) 2>/dev/null || true
+    echo "=== Cleanup complete ==="
+}
+
 # SWE-bench venv (for harness)
 SWEBENCH_VENV="${REPO_ROOT}/.venv/swebench"
 SWEBENCH_PY="${SWEBENCH_VENV}/bin/python"
@@ -175,6 +199,10 @@ COMMANDS
   --init
       Install the official swebench Python package in a local venv
       (.venv/swebench/). Required before --eval to use the official harness.
+
+  --cleanup
+      Stop and remove all Docker containers and images. Run this when disk
+      space is running low (default threshold: 80%).
 
 ENVIRONMENT
   SWE_WORKSPACE_DIR
@@ -398,6 +426,12 @@ do_run() {
     local image_name
     image_name=$(instance_to_image "$instance_id")
 
+    # Check storage before pulling
+    if ! check_storage; then
+        echo "Run './run.sh --cleanup' to free space, or set MAX_STORAGE_PCT"
+        exit 1
+    fi
+
     # Pull the image if not present
     if ! docker image inspect "$image_name" >/dev/null 2>&1; then
         echo "Pulling swebench image: ${image_name}..."
@@ -463,6 +497,12 @@ do_run_all() {
             continue
         fi
         count=$((count + 1))
+        # Check storage before each instance
+        if ! check_storage; then
+            echo "Run './run.sh --cleanup' to free space, or set MAX_STORAGE_PCT"
+            break
+        fi
+
         if [ -n "$timeout_sec" ]; then
             # Pre-create output directory
             mkdir -p "${OUTPUT_DIR}/${instance_id}"
@@ -810,6 +850,9 @@ case "$1" in
         ;;
     --interactive|-i)
         do_interactive "${2:-}"
+        ;;
+    --cleanup)
+        do_cleanup
         ;;
     *)
         echo "Unknown option: $1"
