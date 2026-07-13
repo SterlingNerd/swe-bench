@@ -414,7 +414,7 @@ do_run() {
     echo "Image: ${image_name}"
     echo "=============================================================================="
 
-    docker run \
+    docker run --rm \
         --name "swe_${agent}_${instance_id}" \
         "${DOCKER_RUN_FLAGS[@]}" \
         -v "${WORKSPACE_DIR}:/workspace:rw" \
