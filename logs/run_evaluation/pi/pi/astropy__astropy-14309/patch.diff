@@ -1,0 +1,42 @@
+diff --git a/astropy/io/fits/connect.py b/astropy/io/fits/connect.py
+index 4b6150f4a..99a073f4c 100644
+--- a/astropy/io/fits/connect.py
++++ b/astropy/io/fits/connect.py
+@@ -69,6 +69,8 @@ def is_fits(origin, filepath, fileobj, *args, **kwargs):
+             (".fits", ".fits.gz", ".fit", ".fit.gz", ".fts", ".fts.gz")
+         ):
+             return True
++    if len(args) == 0:
++        return False
+     return isinstance(args[0], (HDUList, TableHDU, BinTableHDU, GroupsHDU))
+ 
+ 
+diff --git a/astropy/io/misc/hdf5.py b/astropy/io/misc/hdf5.py
+index 13e86bd5f..9348dd9b0 100644
+--- a/astropy/io/misc/hdf5.py
++++ b/astropy/io/misc/hdf5.py
+@@ -56,8 +56,9 @@ def is_hdf5(origin, filepath, fileobj, *args, **kwargs):
+         import h5py
+     except ImportError:
+         return False
+-    else:
+-        return isinstance(args[0], (h5py.File, h5py.Group, h5py.Dataset))
++    if len(args) == 0:
++        return False
++    return isinstance(args[0], (h5py.File, h5py.Group, h5py.Dataset))
+ 
+ 
+ def read_table_hdf5(input, path=None, character_as_bytes=True):
+diff --git a/astropy/io/votable/connect.py b/astropy/io/votable/connect.py
+index 86f48f6cc..6c3891b8f 100644
+--- a/astropy/io/votable/connect.py
++++ b/astropy/io/votable/connect.py
+@@ -39,6 +39,8 @@ def is_votable(origin, filepath, fileobj, *args, **kwargs):
+             return result
+         elif filepath is not None:
+             return is_votable(filepath)
++        if len(args) == 0:
++            return False
+         return isinstance(args[0], (VOTableFile, VOTable))
+ 
+     else:

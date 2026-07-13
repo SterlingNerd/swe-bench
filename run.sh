@@ -537,7 +537,7 @@ do_eval() {
 
     # Build predictions file in swebench format
     local preds="${eval_dir}/predictions.json"
-    "${SWEBENCH_PY}" -c "
+    EVAL_DIR="${eval_dir}" AGENT_NAME="${agent}" PREDS="${preds}" "${SWEBENCH_PY}" -c "
 import sys, json, os
 results = []
 for instance_id in sys.argv[1:]:
@@ -554,7 +554,7 @@ for instance_id in sys.argv[1:]:
 with open(os.environ['PREDS'], 'w') as f:
     json.dump(results, f)
 print(f'Wrote {len(results)} predictions to {os.environ[\"PREDS\"]}')
-" EVAL_DIR="${eval_dir}" AGENT_NAME="${agent}" PREDS="${preds}" "${instance_ids[@]}"
+" "${instance_ids[@]}"
 
     echo "=============================================================================="
     echo "Running swebench harness on ${#instance_ids[@]} patch(es) for '${agent}'"
@@ -569,16 +569,15 @@ print(f'Wrote {len(results)} predictions to {os.environ[\"PREDS\"]}')
         --cache_level instance \
         --report_dir "${eval_dir}" \
         --run_id "${agent}" \
-        "${instance_ids[@]}"
+        -i "${instance_ids[@]}"
 
     # Fold harness results back into each result.json
     echo "Folding harness results into result.json..."
-    "${SWEBENCH_PY}" -c "
+    EVAL_DIR="${eval_dir}" "${SWEBENCH_PY}" -c "
 import json, os, glob
 report_dir = os.environ['EVAL_DIR']
-# swebench writes aggregate report to CWD as <model>__<run_id>.json
-# e.g. pi__pi.json with resolved_ids, unresolved_ids, error_ids lists
-cands = glob.glob(os.path.join(report_dir, '*.json')) + glob.glob('*__*.json')
+# swebench writes aggregate report to CWD as <model>.<run_id>.json or <model>__<run_id>.json
+cands = glob.glob(os.path.join(report_dir, '*.json')) + glob.glob('*__*.json') + glob.glob('*.pi.json')
 rep = None
 for c in cands:
     try:
@@ -592,16 +591,21 @@ if not rep:
     exit(0)
 resolved = set(rep.get('resolved_ids', []))
 errored  = set(rep.get('error_ids', []))
+folded = 0
 for iid in set(resolved) | set(rep.get('unresolved_ids', [])) | errored:
     rf = os.path.join(report_dir, iid, 'result.json')
     if not os.path.exists(rf): continue
-    meta = json.load(open(rf))
-    if iid in resolved:   meta['local_eval'] = 'resolved'; meta['status'] = 'resolved'
-    elif iid in errored:  meta['local_eval'] = 'error';    meta['status'] = 'error'
-    else:                 meta['local_eval'] = 'failed';    meta['status'] = 'failed'
-    json.dump(meta, open(rf, 'w'), indent=2)
-print(f'Folded results for {len(resolved) + len(errored)} instances')
-" EVAL_DIR="${eval_dir}"
+    try:
+        meta = json.load(open(rf))
+        if iid in resolved:   meta['local_eval'] = 'resolved'; meta['status'] = 'resolved'
+        elif iid in errored:  meta['local_eval'] = 'error';    meta['status'] = 'error'
+        else:                 meta['local_eval'] = 'failed';    meta['status'] = 'failed'
+        json.dump(meta, open(rf, 'w'), indent=2)
+        folded += 1
+    except PermissionError:
+        print(f'WARNING: Cannot write {rf}, skipping')
+print(f'Folded results for {folded} instances ({len(resolved) + len(errored)} total)')
+"
 }
 
 # ==============================================================================

@@ -1,0 +1,58 @@
+diff --git a/astropy/coordinates/sky_coordinate.py b/astropy/coordinates/sky_coordinate.py
+index ab475f7d0..4841e4eff 100644
+--- a/astropy/coordinates/sky_coordinate.py
++++ b/astropy/coordinates/sky_coordinate.py
+@@ -871,6 +871,19 @@ class SkyCoord(ShapedLikeNDArray):
+         Overrides getattr to return coordinates that this can be transformed
+         to, based on the alias attr in the primary transform graph.
+         """
++        # If attr is a property on the class, re-raise with from None to avoid
++        # confusing error messages. When a property raises AttributeError,
++        # Python's attribute lookup catches it and calls __getattr__ for the
++        # same attribute name (e.g., 'prop' instead of the actual missing attr).
++        # Re-raising with from None suppresses the misleading chained exception.
++        for cls in type(self).__mro__:
++            if attr in cls.__dict__ and isinstance(cls.__dict__[attr], property):
++                raise AttributeError(
++                    f"'{self.__class__.__name__}' object has no attribute '{attr}'"
++                ) from None
++
++        # If we get here, attr is not a property and doesn't exist.
++        # Provide a clear error message.
+         if "_sky_coord_frame" in self.__dict__:
+             if self._is_name(attr):
+                 return self  # Should this be a deepcopy of self?
+diff --git a/astropy/coordinates/tests/test_sky_coord.py b/astropy/coordinates/tests/test_sky_coord.py
+index 4dcfba0d4..4d5e1a1cf 100644
+--- a/astropy/coordinates/tests/test_sky_coord.py
++++ b/astropy/coordinates/tests/test_sky_coord.py
+@@ -2165,3 +2165,29 @@ def test_match_to_catalog_3d_and_sky():
+     npt.assert_array_equal(idx, [0, 1, 2, 3])
+     assert_allclose(angle, 0 * u.deg, atol=1e-14 * u.deg, rtol=0)
+     assert_allclose(distance, 0 * u.kpc, atol=1e-14 * u.kpc, rtol=0)
++
++
++def test_subclass_property_attribute_error():
++    """Test that property AttributeError in subclasses gives clear error.
++
++    When a subclass of SkyCoord defines a property that raises AttributeError,
++    the error message should not be misleading. This is a regression test for
++    https://github.com/astropy/astropy/issues/12687.
++    """
++
++    class custom_coord(SkyCoord):
++        @property
++        def prop(self):
++            return self.random_attr  # random_attr doesn't exist
++
++    c = custom_coord("00h42m30s", "+41d12m00s", frame="icrs")
++
++    # The error should be raised, but without a confusing chained exception
++    with pytest.raises(AttributeError) as excinfo:
++        c.prop
++
++    # The error message should mention 'prop' (the attribute being accessed)
++    assert "prop" in str(excinfo.value)
++    # There should be no chained exception (__cause__ or __context__)
++    assert excinfo.value.__cause__ is None
++    assert excinfo.value.__context__ is None
