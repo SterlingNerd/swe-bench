@@ -454,6 +454,7 @@ do_run_all() {
     fi
 
     local count=0 skipped=0
+    set +e  # Don't exit on errors — we handle them per-instance
     # Get all instance IDs
     while read -r instance_id; do
         # Resume: skip instances that already have a result.json
@@ -505,6 +506,7 @@ data = json.load(sys.stdin)
 for inst in data:
     print(inst['instance_id'])
 ")
+    set -e  # Restore error handling
     echo ""
     echo "Done: ${count} run, ${skipped} skipped (resume)"
 }
