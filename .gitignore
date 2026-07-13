@@ -13,3 +13,5 @@ agents/*/bundle/
 # OS / editor noise
 .DS_Store
 *.swp
+logs/
+pi.pi.json
