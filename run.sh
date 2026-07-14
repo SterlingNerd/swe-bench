@@ -545,7 +545,11 @@ do_run_all() {
             continue
         fi
         count=$((count + 1))
-        # Check storage before each instance
+        # Determine swebench image for this instance
+        local image_name
+        image_name=$(instance_to_image "$instance_id")
+
+        # Check storage before pulling
         if ! check_storage; then
             echo "Run './run.sh --cleanup' to free space, or set MAX_STORAGE_PCT"
             break
