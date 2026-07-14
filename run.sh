@@ -537,6 +537,14 @@ do_run_all() {
 
     local count=0 skipped=0
     set +e  # Don't exit on errors — we handle them per-instance
+    # Get all instance IDs to temp file
+    local inst_file=$(mktemp)
+    fetch_dataset | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for inst in data:
+    print(inst['instance_id'])
+" > "$inst_file"
     # Get all instance IDs
     while read -r instance_id; do
         # Resume: skip instances that already have a result.json
@@ -570,12 +578,8 @@ do_run_all() {
 
         # Run instance (do_run handles output dir creation)
         do_run "$agent" "$instance_id"
-    done < <(fetch_dataset | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for inst in data:
-    print(inst['instance_id'])
-")
+    done < "$inst_file"
+    rm -f "$inst_file"
     set -e  # Restore error handling
     echo ""
     echo "Done: ${count} run, ${skipped} skipped (resume)"
