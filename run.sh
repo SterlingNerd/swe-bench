@@ -3,7 +3,8 @@
 # SWE-bench Orchestrator — unified build, index, list, run, and eval
 #
 # Architecture: Self-contained agent bundles mounted into swebench eval images.
-# Each instance has a pre-built swebench image; we mount our bundle inside it.
+# Each instance has a pre-built swebench image; we mount the bundle read-only
+# at /agent. Outputs are written inside the container and copied out via docker cp.
 #
 # Usage:
 #   ./run.sh --help              Show this help
@@ -11,12 +12,12 @@
 #   ./run.sh --list [filter]     List problems (optional grep filter)
 #   ./run.sh --build [agent]     Build agent bundle(s) only
 #   ./run.sh --rebuild [scope] Rebuild from scratch (--no-cache): all|<agent>
-#   ./run.sh --run <agent> <id>  Run an agent against a specific instance
-#   ./run.sh --run-all <agent>   Run agent against all 500 instances
-#   ./run.sh --eval <agent>      Evaluate collected patches (official swebench harness)
-#   ./run.sh --summarize [agent]  Combine and summarize collected results
-#   ./run.sh --status            Show completion status
-#   ./run.sh --interactive <id>  Drop into interactive shell in swebench image
+#   ./run.sh --run <agent> <id>         Run agent against a specific instance
+#   ./run.sh --run-all <agent> [--timeout N] [--resume]
+#   ./run.sh --eval <agent>             Evaluate collected patches
+#   ./run.sh --summarize [agent]        Combine and summarize results
+#   ./run.sh --status [agent]           Show completion status
+#   ./run.sh --interactive <agent> <id> Drop into an agent's eval image
 #   ./run.sh --init              Install swebench harness (creates .venv/swebench)
 #
 # Workflow:
@@ -80,11 +81,77 @@ check_storage() {
     return 0
 }
 
+require_docker() {
+    if ! docker info >/dev/null 2>&1; then
+        echo "ERROR: Docker is unavailable from this WSL shell." >&2
+        echo "Restart Docker Desktop and WSL, then verify: docker run --rm hello-world" >&2
+        return 1
+    fi
+}
+
+DOCKER_READY=0
+ensure_docker() {
+    [ "$DOCKER_READY" -eq 1 ] && return 0
+    require_docker || return 1
+    DOCKER_READY=1
+}
+
+record_host_result() {
+    local result_file="$1"
+    local status="$2"
+    local container_exit_code="$3"
+    local elapsed_seconds="$4"
+
+    RESULT_FILE="$result_file" RESULT_STATUS="$status" \
+        CONTAINER_EXIT_CODE="$container_exit_code" ELAPSED_SECONDS="$elapsed_seconds" \
+        python3 - <<'PY'
+import json
+import os
+
+path = os.environ["RESULT_FILE"]
+result = {}
+try:
+    with open(path) as handle:
+        result = json.load(handle)
+except (FileNotFoundError, json.JSONDecodeError, ValueError):
+    pass
+
+result.update({
+    "status": os.environ["RESULT_STATUS"],
+    "container_exit_code": int(os.environ["CONTAINER_EXIT_CODE"]),
+    "elapsed_seconds": int(os.environ["ELAPSED_SECONDS"]),
+})
+result.setdefault("patch_bytes", 0)
+with open(path, "w") as handle:
+    json.dump(result, handle, indent=2)
+PY
+}
+
 do_cleanup() {
-    echo "=== Cleaning up Docker resources ==="
-    docker stop $(docker ps -q) 2>/dev/null || true
-    docker rm -f $(docker ps -aq) 2>/dev/null || true
-    docker rmi $(docker images -q) 2>/dev/null || true
+    ensure_docker || return 1
+    echo "=== Cleaning up SWE-bench Docker resources ==="
+
+    local containers=()
+    local images=()
+    mapfile -t containers < <(docker ps -aq --filter 'name=^/swe_')
+    if [ ${#containers[@]} -gt 0 ]; then
+        docker rm -f "${containers[@]}" >/dev/null
+        echo "Removed ${#containers[@]} SWE-bench container(s)."
+    fi
+
+    mapfile -t images < <(
+        docker images --format '{{.Repository}} {{.ID}}' |
+            awk '$1 ~ /^swebench\/sweb\./ {print $2}' |
+            sort -u
+    )
+    if [ ${#images[@]} -gt 0 ]; then
+        docker rmi "${images[@]}"
+        echo "Removed ${#images[@]} SWE-bench image(s)."
+    fi
+
+    if [ ${#containers[@]} -eq 0 ] && [ ${#images[@]} -eq 0 ]; then
+        echo "No SWE-bench Docker resources found."
+    fi
     echo "=== Cleanup complete ==="
 }
 
@@ -167,7 +234,7 @@ PYEOF
 ' > "$CACHE_FILE" 2>/dev/null; then
             echo "ERROR: Failed to fetch dataset from HuggingFace."
             rm -f "$CACHE_FILE"
-            exit 1
+            return 1
         fi
     fi
     cat "$CACHE_FILE"
@@ -229,11 +296,11 @@ COMMANDS
       agents/ (e.g. pi, codex). INSTANCE_ID is like django__django-11039.
       Spins up the swebench eval image for that instance, mounts our agent
       bundle read-only at /agent, and calls entrypoint.sh inside it.
-      Results are written to <workspace>/outputs/<INSTANCE_ID>/.
+      Results are written to <workspace>/outputs/<AGENT>/<INSTANCE_ID>/.
 
   --run-all <AGENT> [--timeout N] [--resume]
       Run an agent against every cached instance (all 500 verified instances),
-      collecting one patch per instance to <workspace>/outputs/<INSTANCE_ID>/.
+      collecting one patch per instance under <workspace>/outputs/<AGENT>/.
       --timeout N  Kill containers exceeding N seconds (default: 3600 = 1 hour)
       --resume     Skip instances that already have a result.json
       Long-running: consider running in the background.
@@ -245,26 +312,27 @@ COMMANDS
       the swebench Python package.
 
   --summarize [AGENT]
-      Combine and summarize all collected results into outputs/summary.json and
-      print a table (status / local_eval / patch size). Optional AGENT filter
-      matches instance ids prefixed with '<agent>__'.
+      Combine and summarize results into outputs/<agent>/summary.json and print
+      a table (status / local_eval / patch size). If AGENT is omitted, summarize
+      each agent output directory independently.
 
-  --status
+  --status [AGENT]
       Summarize progress of collected runs: totals plus per-instance status
-      (resolved / failed / no patch / unknown) read from result.json files.
+      (resolved / failed / no patch / timeout / error). If AGENT is omitted,
+      show every agent output directory.
 
-  --interactive <INSTANCE_ID>
+  --interactive <AGENT> <INSTANCE_ID>
       Drop into an interactive shell inside the swebench eval image for that
-      instance. Our agent bundle is mounted read-only at /agent. Useful for
-      debugging entrypoint.sh or testing pi manually inside the harness image.
+      instance with the selected bundle mounted read-only at /agent. Useful for
+      debugging entrypoint.sh or testing an agent manually inside the image.
 
   --init
       Install the official swebench Python package in a local venv
       (.venv/swebench/). Required before --eval to use the official harness.
 
   --cleanup
-      Stop and remove all Docker containers and images. Run this when disk
-      space is running low (default threshold: 80%).
+      Remove only harness-owned swe_* containers and swebench/sweb.* images.
+      Unrelated Docker resources are never touched.
 
   --cleanup-partial
       Remove output directories that are missing result.json or patch.diff
@@ -298,7 +366,8 @@ EXAMPLES
   $(basename "$0") --run pi django__django-11039
   $(basename "$0") --run-all pi
   $(basename "$0") --eval pi
-  $(basename "$0") --status
+  $(basename "$0") --status pi
+  $(basename "$0") --interactive pi django__django-11039
 EOF
 }
 
@@ -341,7 +410,7 @@ do_build() {
         for d in "${AGENTS_DIR}"/*/; do
             [ -d "$d" ] && [ "$(basename "$d")" != "base" ] && echo "  $(basename "$d")"
         done
-        exit 1
+        return 1
     fi
 
     echo "=== Building Agent Bundles (no Docker images) ==="
@@ -401,7 +470,7 @@ do_rebuild() {
         for d in "${AGENTS_DIR}"/*/; do
             [ -d "$d" ] && [ "$(basename "$d")" != "base" ] && echo "  $(basename "$d")"
         done
-        exit 1
+        return 1
     fi
 
     echo "=== Rebuilding (--no-cache) ==="
@@ -472,6 +541,12 @@ DOCKER_RUN_FLAGS=(
 do_run() {
     local agent="${1:?Usage: $0 --run <agent> <instance_id>}"
     local instance_id="${2:?Usage: $0 --run <agent> <instance_id>}"
+    local timeout_sec="${3:-3600}"
+
+    if ! [[ "$timeout_sec" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: Timeout must be a non-negative integer, got '${timeout_sec}'."
+        return 2
+    fi
 
     # Validate agent exists
     if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
@@ -479,14 +554,14 @@ do_run() {
         for d in "${AGENTS_DIR}"/*/; do
             [ -d "$d" ] && echo "  $(basename "$d")"
         done
-        exit 1
+        return 1
     fi
 
     # Validate agent bundle exists
     local bundle_dir="${AGENTS_DIR}/${agent}/bundle"
     if [ ! -d "$bundle_dir" ]; then
         echo "ERROR: Agent bundle not found at ${bundle_dir}. Run './run.sh --build ${agent}' first."
-        exit 1
+        return 1
     fi
 
     # Get instance data
@@ -504,7 +579,7 @@ do_run() {
     # Check storage before pulling
     if ! check_storage; then
         echo "Run './run.sh --cleanup' to free space, or set MAX_STORAGE_PCT"
-        exit 1
+        return 1
     fi
 
     # Pull the image if not present (try cache first)
@@ -520,9 +595,12 @@ do_run() {
         fi
     fi
 
-    # Pre-create output directory writable by container uid 1001
-    mkdir -p "${OUTPUT_DIR}/${instance_id}"
-    chmod 777 "${OUTPUT_DIR}/${instance_id}"
+    # Keep each agent's artifacts isolated so comparisons cannot overwrite or
+    # mislabel another agent's patch.
+    local agent_output_root="${OUTPUT_DIR}/${agent}"
+    local instance_output_dir="${agent_output_root}/${instance_id}"
+    mkdir -p "$instance_output_dir"
+    chmod 777 "$agent_output_root" "$instance_output_dir"
 
     # Run the agent container
     echo "=============================================================================="
@@ -530,17 +608,80 @@ do_run() {
     echo "Image: ${image_name}"
     echo "=============================================================================="
 
-    docker run --rm \
-        --name "swe_${agent}_${instance_id}" \
-        "${DOCKER_RUN_FLAGS[@]}" \
-        -v "${WORKSPACE_DIR}:/workspace:rw" \
-        -v "${bundle_dir}:/agent:ro" \
-        "$image_name" \
-        /agent/entrypoint.sh \
-        "${instance_id}" \
-        "https://github.com/${repo_url}" \
-        "${base_commit}" \
-        "${problem_statement}" || true
+    local container_name="swe_${agent}_${instance_id}"
+    local started_at docker_status elapsed
+    local docker_command=(
+        docker run
+        --name "$container_name"
+        "${DOCKER_RUN_FLAGS[@]}"
+        -e "SWE_AGENT_NAME=${agent}"
+        -e "SWE_OUTPUT_ROOT=/workspace/outputs/${agent}"
+        -v "${bundle_dir}:/agent:ro"
+        "$image_name"
+        /agent/entrypoint.sh
+        "$instance_id"
+        "https://github.com/${repo_url}"
+        "$base_commit"
+        "$problem_statement"
+    )
+
+    started_at=$(date +%s)
+    if [ "$timeout_sec" -gt 0 ]; then
+        if timeout --foreground --signal=TERM --kill-after=30s "${timeout_sec}s" \
+            "${docker_command[@]}"; then
+            docker_status=0
+        else
+            docker_status=$?
+        fi
+    elif "${docker_command[@]}"; then
+        docker_status=0
+    else
+        docker_status=$?
+    fi
+    elapsed=$(( $(date +%s) - started_at ))
+
+    if [ "$docker_status" -eq 124 ]; then
+        docker rm -f "$container_name" >/dev/null 2>&1 || true
+        record_host_result "${instance_output_dir}/result.json" "timed_out" \
+            "$docker_status" "$elapsed"
+        echo "ERROR: ${agent}/${instance_id} timed out after ${timeout_sec}s."
+        return $docker_status
+    fi
+
+    if [ "$docker_status" -ne 0 ]; then
+        docker rm -f "$container_name" >/dev/null 2>&1 || true
+        record_host_result "${instance_output_dir}/result.json" "container_error" \
+            "$docker_status" "$elapsed"
+        echo "ERROR: ${agent}/${instance_id} container exited with ${docker_status}."
+        return $docker_status
+    fi
+
+    # Copy outputs out before removing the container.
+    # Check docker inspect to distinguish violent deaths from clean exits.
+    local container_state=""
+    if ! container_state=$(docker inspect --format '{{.State.Status}}' "$container_name" 2>/dev/null); then
+        echo "  WARNING: Cannot inspect container state, attempting copy anyway."
+    fi
+
+    mkdir -p "$instance_output_dir"
+    if docker cp "${container_name}:/workspace/outputs/${agent}/${instance_id}/" \
+                 "${instance_output_dir}/" 2>/dev/null; then
+        echo "  Copied outputs from container."
+    else
+        case "$container_state" in
+            dead|error)
+                echo "  WARNING: Container died violently (state=$container_state), output may be incomplete."
+                ;;
+            *)
+                echo "  WARNING: Failed to copy outputs from container (state=$container_state)."
+                ;;
+        esac
+    fi
+
+    # Clean up the container
+    docker rm -f "$container_name" >/dev/null 2>&1 || true
+
+    return 0
 }
 
 # ==============================================================================
@@ -559,26 +700,32 @@ do_run_all() {
         case "$1" in
             --timeout) timeout_sec="${2:?--timeout requires a number}"; shift 2 ;;
             --resume)  resume=1; shift ;;
-            *)         echo "Unknown option: $1"; exit 1 ;;
+            *)         echo "Unknown option: $1"; return 1 ;;
         esac
     done
 
     # Validate agent exists
     if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
         echo "ERROR: Agent '${agent}' not found."
-        exit 1
+        return 1
     fi
 
-    local count=0 skipped=0
+    local count=0 skipped=0 failed=0
+    local agent_output_root="${OUTPUT_DIR}/${agent}"
     set +e  # Don't exit on errors — we handle them per-instance
     # Get all instance IDs to temp file
-    local inst_file=$(mktemp)
-    fetch_dataset | python3 -c "
+    local inst_file
+    inst_file=$(mktemp)
+    if ! fetch_dataset | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 for inst in data:
     print(inst['instance_id'])
-" > "$inst_file"
+" > "$inst_file"; then
+        echo "ERROR: Failed to enumerate SWE-bench instances."
+        rm -f "$inst_file"
+        return 1
+    fi
     # Get all instance IDs
     while read -r instance_id; do
         echo "=== Processing: ${instance_id} ==="
@@ -599,7 +746,7 @@ for inst in data:
         # Double check — kill any remaining containers from previous runs
         docker ps --format "{{.Names}}" | grep "swe_${agent}_" | xargs -I {} docker stop {} 2>/dev/null || true
         # Resume: skip instances that already have a result.json
-        if [ "$resume" = 1 ] && [ -f "${OUTPUT_DIR}/${instance_id}/result.json" ]; then
+        if [ "$resume" = 1 ] && [ -f "${agent_output_root}/${instance_id}/result.json" ]; then
             skipped=$((skipped + 1))
             continue
         fi
@@ -628,12 +775,15 @@ for inst in data:
         fi
 
         # Run instance (do_run handles output dir creation)
-        do_run "$agent" "$instance_id"
+        if ! do_run "$agent" "$instance_id" "$timeout_sec"; then
+            failed=$((failed + 1))
+        fi
     done < "$inst_file"
     rm -f "$inst_file"
     set -e  # Restore error handling
     echo ""
-    echo "Done: ${count} run, ${skipped} skipped (resume)"
+    echo "Done: ${count} run, ${skipped} skipped (resume), ${failed} failed"
+    [ "$failed" -eq 0 ]
 }
 
 # ==============================================================================
@@ -646,27 +796,27 @@ do_eval() {
         for d in "${AGENTS_DIR}"/*/; do
             [ -d "$d" ] && echo "  $(basename "$d")"
         done
-        exit 1
+        return 1
     fi
 
     # Check swebench is installed
     if [ ! -f "${SWEBENCH_PY}" ]; then
         echo "ERROR: swebench not installed. Run './run.sh --init' first."
-        exit 1
+        return 1
     fi
 
-    local eval_dir="${OUTPUT_DIR}"
+    local eval_dir="${OUTPUT_DIR}/${agent}"
     [ -d "$eval_dir" ] || { echo "No outputs found. Run instances first (--run or --run-all)."; return; }
 
-    # Collect instance IDs that have patches
+    # Collect instance IDs that have non-empty patches
     local instance_ids=()
     for d in "${eval_dir}"/*/; do
-        [ -d "$d" ] && [ -f "${d}patch.diff" ] && instance_ids+=("$(basename "$d")")
+        [ -d "$d" ] && [ -s "${d}patch.diff" ] && instance_ids+=("$(basename "$d")")
     done
     [ ${#instance_ids[@]} -eq 0 ] && { echo "No patches found to evaluate. Run instances first."; return; }
 
-    # Build predictions file in swebench format
-    local preds="${eval_dir}/predictions.json"
+    # Build predictions file in swebench format (JSONL)
+    local preds="${eval_dir}/predictions.jsonl"
     EVAL_DIR="${eval_dir}" AGENT_NAME="${agent}" PREDS="${preds}" "${SWEBENCH_PY}" -c "
 import sys, json, os
 results = []
@@ -682,7 +832,8 @@ for instance_id in sys.argv[1:]:
         'model_patch': patch
     })
 with open(os.environ['PREDS'], 'w') as f:
-    json.dump(results, f)
+    for result in results:
+        f.write(json.dumps(result) + '\\n')
 print(f'Wrote {len(results)} predictions to {os.environ[\"PREDS\"]}')
 " "${instance_ids[@]}"
 
@@ -690,24 +841,36 @@ print(f'Wrote {len(results)} predictions to {os.environ[\"PREDS\"]}')
     echo "Running swebench harness on ${#instance_ids[@]} patch(es) for '${agent}'"
     echo "=============================================================================="
 
-    # Run the official swebench harness
-    "${SWEBENCH_PY}" -m swebench.harness.run_evaluation \
-        --dataset_name "${HF_DATASET}" \
-        --split "test" \
-        --predictions_path "${preds}" \
-        --max_workers 1 \
-        --cache_level instance \
-        --report_dir "${eval_dir}" \
-        --run_id "${agent}" \
-        -i "${instance_ids[@]}"
+    # Run the official swebench harness from the selected agent's output tree.
+    # This keeps its aggregate reports from being confused with another agent.
+    local report_dir="${eval_dir}/eval"
+    mkdir -p "$report_dir"
+    (
+        cd "$eval_dir"
+        "${SWEBENCH_PY}" -m swebench.harness.run_evaluation \
+            --dataset_name "${HF_DATASET}" \
+            --split "test" \
+            --predictions_path "${preds}" \
+            --max_workers 1 \
+            --cache_level instance \
+            --report_dir "${report_dir}" \
+            --run_id "${agent}" \
+            -i "${instance_ids[@]}"
+    )
 
     # Fold harness results back into each result.json
     echo "Folding harness results into result.json..."
-    EVAL_DIR="${eval_dir}" "${SWEBENCH_PY}" -c "
+    EVAL_DIR="${eval_dir}" AGENT_NAME="${agent}" "${SWEBENCH_PY}" -c "
 import json, os, glob
 report_dir = os.environ['EVAL_DIR']
-# swebench writes aggregate report to CWD as <model>.<run_id>.json or <model>__<run_id>.json
-cands = glob.glob(os.path.join(report_dir, '*.json')) + glob.glob('*__*.json') + glob.glob('*.pi.json')
+agent = os.environ['AGENT_NAME']
+# swebench versions have used both separators; prefer the exact agent/run id,
+# then fall back to the newest aggregate report inside this agent directory.
+cands = [
+    os.path.join(report_dir, f'{agent}.{agent}.json'),
+    os.path.join(report_dir, f'{agent}__{agent}.json'),
+]
+cands.extend(sorted(glob.glob(os.path.join(report_dir, '*.json')), key=os.path.getmtime, reverse=True))
 rep = None
 for c in cands:
     try:
@@ -726,23 +889,15 @@ for iid in set(resolved) | set(rep.get('unresolved_ids', [])) | errored:
     rf = os.path.join(report_dir, iid, 'result.json')
     if not os.path.exists(rf): continue
     try:
-        # Read existing meta (preserve patch_bytes, elapsed_seconds)
-        old_meta = {}
-        if os.path.exists(rf):
-            try:
-                old_meta = json.load(open(rf))
-            except Exception:
-                pass
-            os.unlink(rf)
-        meta = {
-            'status': old_meta.get('status', 'patch_collected'),
-            'patch_bytes': old_meta.get('patch_bytes', 0),
-            'elapsed_seconds': old_meta.get('elapsed_seconds', 0)
-        }
+        try:
+            meta = json.load(open(rf))
+        except Exception:
+            meta = {'status': 'patch_collected'}
         if iid in resolved:   meta['local_eval'] = 'resolved'; meta['status'] = 'resolved'
         elif iid in errored:  meta['local_eval'] = 'error';    meta['status'] = 'error'
         else:                 meta['local_eval'] = 'failed';    meta['status'] = 'failed'
-        json.dump(meta, open(rf, 'w'), indent=2)
+        with open(rf, 'w') as handle:
+            json.dump(meta, handle, indent=2)
         folded += 1
     except PermissionError:
         print(f'WARNING: Cannot write {rf}, skipping')
@@ -753,14 +908,14 @@ print(f'Folded results for {folded} instances ({len(resolved) + len(errored)} to
 # ==============================================================================
 # SUMMARIZE — combine and summarize all collected results
 # ==============================================================================
-do_summarize() {
-    local agent="${1:-}"
-    local eval_dir="${OUTPUT_DIR}"
-    [ -d "$eval_dir" ] || { echo "No outputs found."; return; }
+summarize_agent() {
+    local agent="$1"
+    local eval_dir="${OUTPUT_DIR}/${agent}"
+    [ -d "$eval_dir" ] || { echo "No outputs found for agent '${agent}'."; return; }
     local out_json="${eval_dir}/summary.json"
     AGENT="${agent}" EVAL_DIR="${eval_dir}" OUT_JSON="${out_json}" python3 - <<'PY'
 import json, os, glob
-agent=(os.environ.get('AGENT') or '').strip().lower()
+agent=os.environ['AGENT']
 eval_dir=os.environ['EVAL_DIR']; out_json=os.environ['OUT_JSON']
 rows=[]
 for d in sorted(glob.glob(os.path.join(eval_dir,'*',''))):
@@ -784,44 +939,70 @@ resolved=sum(1 for r in rows if r['local_eval']=='resolved')
 failed=sum(1 for r in rows if r['local_eval']=='failed')
 errored=sum(1 for r in rows if r['local_eval']=='error')
 no_patch=sum(1 for r in rows if r['status']=='no_patch')
-summary={'agent_filter':agent or None,'total':total,
-         'resolved':resolved,'failed':failed,'errored':errored,'no_patch':no_patch,'rows':rows}
+timed_out=sum(1 for r in rows if r['status']=='timed_out')
+agent_errors=sum(1 for r in rows if r['status'] in ('agent_error','container_error'))
+summary={'agent':agent,'total':total, 'resolved':resolved,'failed':failed,
+         'errored':errored,'no_patch':no_patch,'timed_out':timed_out,
+         'agent_errors':agent_errors,'rows':rows}
 json.dump(summary, open(out_json,'w'), indent=2)
+print(f"Agent: {agent}")
 print(f"{'instance_id':42s} {'status':12s} {'local_eval':12s} {'patch_B':>8s} {'elapsed_s':>10s}")
 for r in rows:
     print(f"{r['instance_id']:42s} {str(r['status']):12s} {str(r['local_eval']):12s} {str(r['patch_bytes'] or 0):>8s} {str(r['elapsed_seconds'] or 0):>10s}")
-print(f"\nTotal: {total} | resolved: {resolved} | failed: {failed} | error: {errored} | no_patch: {no_patch}")
+print(f"\nTotal: {total} | resolved: {resolved} | failed: {failed} | error: {errored} | no_patch: {no_patch} | timed_out: {timed_out} | agent_error: {agent_errors}")
 print(f"Summary written to {out_json}")
 PY
+}
+
+do_summarize() {
+    local requested_agent="${1:-}"
+    if [ -n "$requested_agent" ]; then
+        summarize_agent "$requested_agent"
+        return
+    fi
+
+    [ -d "$OUTPUT_DIR" ] || { echo "No outputs found."; return; }
+    local found=0 agent_dir
+    for agent_dir in "${OUTPUT_DIR}"/*/; do
+        [ -d "$agent_dir" ] || continue
+        found=1
+        summarize_agent "$(basename "$agent_dir")"
+        echo ""
+    done
+    [ "$found" -eq 1 ] || echo "No agent outputs found."
 }
 
 # ==============================================================================
 # STATUS — show completion status
 # ==============================================================================
-do_status() {
-    echo "=== SWE-bench Harness Status ==="
-    echo "Output directory: ${OUTPUT_DIR}"
-    echo ""
+show_agent_status() {
+    local agent="$1"
+    local agent_output_dir="${OUTPUT_DIR}/${agent}"
+    local total=0 resolved=0 failed=0 no_patch=0 timed_out=0 errors=0 unknown=0
 
-    local total=0 resolved=0 failed=0 no_patch=0 unknown=0
-
-    if [ ! -d "$OUTPUT_DIR" ]; then
-        echo "No outputs found. Run instances first."
+    echo "Agent: ${agent}"
+    if [ ! -d "$agent_output_dir" ]; then
+        echo "  No outputs found."
         return
     fi
 
-    for instance_dir in "${OUTPUT_DIR}"/*/; do
+    local instance_dir instance_id status
+    for instance_dir in "${agent_output_dir}"/*/; do
         [ -d "$instance_dir" ] || continue
-        local instance_id=$(basename "$instance_dir")
+        instance_id=$(basename "$instance_dir")
+        case "$instance_id" in
+            eval|logs) continue ;;
+        esac
         total=$((total + 1))
 
         if [ -f "${instance_dir}result.json" ]; then
-            local status
             status=$(INSTANCE_DIR="${instance_dir}" python3 -c "import json, os; print(json.load(open(os.environ['INSTANCE_DIR'] + 'result.json'))['status'])" 2>/dev/null || echo "unknown")
             case "$status" in
                 resolved) resolved=$((resolved + 1)); echo -e "\033[32m✓\033[0m $instance_id ($status)" ;;
                 failed)   failed=$((failed + 1));   echo -e "\033[31m✗\033[0m $instance_id ($status)" ;;
                 no_patch) no_patch=$((no_patch + 1)); echo -e "\033[33m—\033[0m $instance_id (no patch)" ;;
+                timed_out) timed_out=$((timed_out + 1)); echo -e "\033[33m⌛\033[0m $instance_id (timed out)" ;;
+                error|agent_error|container_error) errors=$((errors + 1)); echo -e "\033[31m!\033[0m $instance_id ($status)" ;;
                 *)        unknown=$((unknown + 1));   echo -e "\033[90m?\033[0m $instance_id ($status)" ;;
             esac
         else
@@ -831,7 +1012,33 @@ do_status() {
     done
 
     echo ""
-    echo "Total: $total | Resolved: $resolved | Failed: $failed | No patch: $no_patch | Unknown: $unknown"
+    echo "Total: $total | Resolved: $resolved | Failed: $failed | No patch: $no_patch | Timed out: $timed_out | Errors: $errors | Unknown: $unknown"
+}
+
+do_status() {
+    local requested_agent="${1:-}"
+    echo "=== SWE-bench Harness Status ==="
+    echo "Output directory: ${OUTPUT_DIR}"
+    echo ""
+
+    if [ -n "$requested_agent" ]; then
+        show_agent_status "$requested_agent"
+        return
+    fi
+
+    if [ ! -d "$OUTPUT_DIR" ]; then
+        echo "No outputs found. Run instances first."
+        return
+    fi
+
+    local found=0 agent_dir
+    for agent_dir in "${OUTPUT_DIR}"/*/; do
+        [ -d "$agent_dir" ] || continue
+        found=1
+        show_agent_status "$(basename "$agent_dir")"
+        echo ""
+    done
+    [ "$found" -eq 1 ] || echo "No agent outputs found."
 }
 
 # ==============================================================================
@@ -857,7 +1064,16 @@ do_init() {
 # INTERACTIVE — drop into interactive shell in swebench eval image
 # ==============================================================================
 do_interactive() {
-    local instance_id="${1:?Usage: $0 --interactive <instance_id>}"
+    local agent="${1:?Usage: $0 --interactive <agent> <instance_id>}"
+    local instance_id="${2:?Usage: $0 --interactive <agent> <instance_id>}"
+
+    ensure_docker || return 1
+
+    local bundle_dir="${AGENTS_DIR}/${agent}/bundle"
+    if [ ! -d "$bundle_dir" ]; then
+        echo "ERROR: Agent bundle not found at ${bundle_dir}. Run './run.sh --build ${agent}' first."
+        return 1
+    fi
 
     # Get instance data to determine repo for image name
     local inst_data
@@ -873,78 +1089,82 @@ do_interactive() {
         docker pull "$image_name" 2>&1 | tail -3
     fi
 
-    echo "Starting interactive shell in ${image_name}..."
-    local DOCKER_RUN="docker run --rm -i"
-    [ -t 0 ] && DOCKER_RUN="$DOCKER_RUN -t"
-    $DOCKER_RUN \
-        --memory 8g \
-        --memory-swap 16g \
-        --pids-limit 500 \
-        --tmpfs /tmp:rw,noexec,nosuid,size=2g \
-        --read-only \
-        --cap-drop ALL \
-        --security-opt no-new-privileges:true \
-        --add-host host.docker.internal:host-gateway \
-        -u 1001:1001 \
-        -v "${WORKSPACE_DIR}:/workspace:rw" \
-        -v "${AGENTS_DIR}/pi/bundle:/agent:ro" \
-        "$image_name" /agent/entrypoint.sh --interactive
+    echo "Starting interactive shell for ${agent} in ${image_name}..."
+    local docker_command=(docker run --rm -i)
+    [ -t 0 ] && docker_command+=(-t)
+    docker_command+=(
+        "${DOCKER_RUN_FLAGS[@]}"
+        -e "SWE_AGENT_NAME=${agent}"
+        -e "SWE_OUTPUT_ROOT=/workspace/outputs/${agent}"
+        -v "${WORKSPACE_DIR}:/workspace:rw"
+        -v "${bundle_dir}:/agent:ro"
+        "$image_name"
+        /agent/entrypoint.sh
+        --interactive
+    )
+    "${docker_command[@]}"
 }
 
 # ==============================================================================
 # MAIN
 # ==============================================================================
-if [ $# -eq 0 ]; then
-    show_help
-    exit 0
-fi
+main() {
+    if [ $# -eq 0 ]; then
+        show_help
+        return 0
+    fi
 
-case "$1" in
-    --help|-h)
-        show_help
-        ;;
-    --index)
-        do_index
-        ;;
-    --list)
-        do_list "${2:-}"
-        ;;
-    --build)
-        do_build "${2:-}"
-        ;;
-    --rebuild)
-        do_rebuild "${2:-}"
-        ;;
-    --run)
-        do_run "${2:-}" "${3:-}"
-        ;;
-    --run-all)
-        do_run_all "${2:-}"
-        ;;
-    --eval)
-        do_eval "${2:-}"
-        ;;
-    --summarize)
-        do_summarize "${2:-}"
-        ;;
-    --status)
-        do_status
-        ;;
-    --init)
-        do_init
-        ;;
-    --interactive|-i)
-        do_interactive "${2:-}"
-        ;;
-    --cleanup)
-        do_cleanup
-        ;;
-    --cleanup-partial)
-        do_cleanup_partial
-        ;;
-    *)
-        echo "Unknown option: $1"
-        show_help
-        exit 1
-        ;;
-esac
+    case "$1" in
+        --help|-h)
+            show_help
+            ;;
+        --index)
+            do_index
+            ;;
+        --list)
+            do_list "${2:-}"
+            ;;
+        --build)
+            do_build "${2:-}"
+            ;;
+        --rebuild)
+            do_rebuild "${2:-}"
+            ;;
+        --run)
+            do_run "${2:-}" "${3:-}"
+            ;;
+        --run-all)
+            do_run_all "${@:2}"
+            ;;
+        --eval)
+            do_eval "${2:-}"
+            ;;
+        --summarize)
+            do_summarize "${2:-}"
+            ;;
+        --status)
+            do_status "${2:-}"
+            ;;
+        --init)
+            do_init
+            ;;
+        --interactive|-i)
+            do_interactive "${2:-}" "${3:-}"
+            ;;
+        --cleanup)
+            do_cleanup
+            ;;
+        --cleanup-partial)
+            do_cleanup_partial
+            ;;
+        *)
+            echo "Unknown option: $1"
+            show_help
+            return 1
+            ;;
+    esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

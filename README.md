@@ -1,144 +1,131 @@
-# SWE-bench + Pi Coding Agent
+# SWE-bench Agent Harness
 
-Self-contained agent bundles mounted into swebench eval images for running coding agents against **SWE-bench Verified** tasks.
+Run self-contained coding-agent bundles against **SWE-bench Verified** tasks,
+collect patches, and evaluate them with the official SWE-bench harness. The
+included `pi` adapter uses the same local llama.cpp model so results can be
+compared across agents without sharing output state.
 
 ## Architecture
 
-```
+```text
 swe-bench/
-├── run.sh                         # Orchestrator (index, build, run, eval)
-│
-├── agents/pi/                     # Pi agent — self-contained bundle
-│   ├── .pi/                       # Pi config (settings, models, auth)
-│   │   ├── settings.json          # Provider, model, retry settings
-│   │   ├── models.json            # Local llama.cpp provider definition
-│   │   └── npm/                   # Pi packages (loop-police, etc.)
-│   ├── build_bundle.sh            # Builds self-contained agent bundle
-│   ├── entrypoint.sh              # Clone → run pi → extract patch
-│   └── bundle/                    # Built bundle (Node.js + pi CLI + config)
-│
-└── workspace/outputs/             # Per-instance results
+├── run.sh                         # Build, run, evaluate, summarize
+├── agents/
+│   ├── pi/                        # Pi CLI, local-provider config, entrypoint
+│   └── codex/                     # Codex CLI, local-provider config, entrypoint
+├── tests/test_harness.sh          # Host-side harness contract tests
+└── workspace/outputs/
+    ├── pi/<instance_id>/          # Pi artifacts
+    └── codex/<instance_id>/       # Codex artifacts
 ```
 
-**Key design:** We build self-contained agent bundles (Node.js + pi CLI + config).
-Our `run.sh` spins up the swebench eval image for each instance, mounts our
-bundle read-only at `/agent`, and calls `entrypoint.sh` inside it. SWE-bench
-then compares our output patches.
+Each agent is built as a relocatable bundle under `agents/<agent>/bundle/`.
+`run.sh` mounts the selected bundle read-only at `/agent` in the official
+per-instance SWE-bench image. The image's repository is already checked out at
+`/testbed`; the agent edits it and the entrypoint extracts a staged binary diff.
+
+## Prerequisites
+
+- Docker Desktop using the WSL 2 engine, with this Ubuntu distribution enabled
+  under **Settings > Resources > WSL Integration**.
+- A local OpenAI-compatible model server reachable from containers at
+  `http://host.docker.internal:11434/v1`.
+- The configured model id is `qwen3.6-35b-a3b`, with the intentionally fake
+  bearer token `local-key`.
+
+Verify Docker from the same WSL shell before running the harness:
+
+```bash
+docker version
+docker run --rm hello-world
+```
+
+If `/usr/bin/docker` starts returning an I/O error even though integration was
+already enabled, quit Docker Desktop, run `wsl --shutdown` in Windows
+PowerShell, reopen Docker Desktop, wait for it to report that the engine is
+running, then reopen Ubuntu and repeat the two Docker checks above.
 
 ## Quick Start
 
-### 1. Index the dataset (first time only)
+Index the 500 verified instances and build both bundles:
 
 ```bash
 ./run.sh --index
+./run.sh --build
 ```
 
-Fetches and caches all 500 SWE-bench Verified instances from HuggingFace.
-
-### 2. Build agent bundles
+Build only one agent, or force a fresh rebuild:
 
 ```bash
-./run.sh --build          # build all agent bundles
-./run.sh --build pi       # build only the 'pi' bundle
+./run.sh --build codex
+./run.sh --rebuild pi
 ```
 
-No Docker images are built by us. Each agent's self-contained bundle is created
-under `agents/<agent>/bundle/` containing Node.js, pi CLI, config files, and
-entrypoint.
-
-To force a from-scratch rebuild:
-
-```bash
-./run.sh --rebuild          # rebuild all bundles from scratch
-./run.sh --rebuild pi       # rebuild only the 'pi' bundle
-```
-
-### 3. Run an agent against a specific instance
+Run either agent on the same instance:
 
 ```bash
 ./run.sh --run pi django__django-7530
+./run.sh --run codex django__django-7530
 ```
 
-Spins up the swebench eval image for that instance, mounts our agent bundle
-read-only at `/agent`, and calls `entrypoint.sh` inside it. Results persist in
-`workspace/outputs/django__django-7530/`.
-
-### 4. Run against all instances
+Run the full dataset with an enforced per-instance timeout. `--resume` skips
+only existing results for the selected agent:
 
 ```bash
-./run.sh --run-all pi
+./run.sh --run-all codex --timeout 3600 --resume
 ```
 
-Iterates through all 500 verified instances sequentially.
-
-### 4b. Evaluate collected patches (official swebench harness)
+Install and invoke the official evaluator, then compare summaries:
 
 ```bash
-./run.sh --init           # install swebench in .venv/swebench (one-time)
-./run.sh --eval pi        # run official swebench harness on collected patches
-./run.sh --summarize pi   # combine results -> outputs/summary.json
-```
-
-The `--eval` step uses the **official SWE-bench harness** (`swebench.harness.run_evaluation`).
-It requires Docker (pulls eval images per instance) and network access. This is NOT Docker-free.
-
-For each collected patch, the harness:
-1. Pulls the swebench eval image for that instance
-2. Applies the model patch + the dataset's test_patch
-3. Runs the instance's FAIL_TO_PASS / PASS_TO_PASS tests
-4. Writes results to the output directory
-
-### 5. Check status
-
-```bash
+./run.sh --init
+./run.sh --eval pi
+./run.sh --eval codex
+./run.sh --summarize
 ./run.sh --status
 ```
 
-Shows color-coded completion overview.
+Use `./run.sh --help` for the complete command and environment-variable list.
 
-## How it works
+## Output Contract
 
-### Agent bundle (`agents/pi/bundle/`)
-Self-contained, relocatable directory containing:
-- Node.js binary (pinned version, architecture-specific)
-- `pi` CLI and all npm dependencies
-- Config files (settings.json, models.json, auth.json) in `.pi/agent/` layout
-- entrypoint.sh shim
+```text
+workspace/outputs/<agent>/<instance_id>/
+├── meta.json                 # Instance, agent, repository, and base commit
+├── problem_statement.txt     # Original SWE-bench issue
+├── agent_output.txt          # Agent's final/plain output
+├── pi-sessions/              # Pi session state (Pi only)
+├── patch.diff                # Binary-safe staged diff, including new files
+├── result.json               # Run status, timings, exit codes, evaluation
+└── eval/                     # Per-instance evaluation artifacts
+```
 
-Built by `agents/pi/build_bundle.sh`. No Docker image needed.
+Possible pre-evaluation statuses include `patch_collected`, `no_patch`,
+`agent_error`, `container_error`, and `timed_out`. `--eval` adds `local_eval`
+and promotes the status to `resolved`, `failed`, or `error` while preserving
+the original agent metadata.
 
-### Container runtime (swebench eval images)
+Aggregate files such as `predictions.jsonl`, `summary.json`, and evaluator
+reports stay inside `workspace/outputs/<agent>/`. This prevents a Pi run from
+being mistaken for, overwritten by, or evaluated as a Codex run.
+
+## Container Runtime
+
 Each instance has a pre-built swebench image:
 ```
 swebench/sweb.eval.x86_64.django_1776_django-7530:latest
 ```
 
-Our `run.sh` spins up that image with:
+`run.sh` spins up that image with:
 1. Agent bundle mounted read-only at `/agent`
-2. Outputs written to writable `/workspace/outputs/[instance_id]/`
-3. Cached repos in `/workspace/repos/`
+2. Outputs written to internal `/workspace/outputs/<agent>/<instance_id>/`
+3. Cached repos in `/tmp/repos` (tmpfs, ephemeral)
 4. Calls `/agent/entrypoint.sh` as the container command
 
-### Entrypoint
-The entrypoint script handles:
-1. Receives: `instance_id`, `repo_url`, `base_commit`, `problem_statement`
-2. Clones repo at correct commit
-3. Runs the agent command (`pi -p` from the bundled binary)
-4. Extracts patch via `git add -A && git diff --cached` (includes new files)
-5. Writes results to `/workspace/outputs/[instance_id]/`
-
-### Output structure
-```
-outputs/<instance_id>/
-├── meta.json                # instance_id, repo_url, base_commit
-├── problem_statement.txt    # Full GitHub issue text
-├── agent_output.txt         # Raw stdout from agent
-├── session.jsonl            # Full pi session (tool calls, responses)
-├── patch.diff               # Git diff of all changes made (including new files)
-├── result.json              # {"status": "resolved|failed|no_patch", "local_eval": "resolved|failed", ...}
-└── eval/                    # (created by --eval / swebench harness)
-    └── reports/             # SWE-bench evaluation reports
-```
+After the container exits, `run.sh` uses `docker cp` to copy outputs out to
+the host. This avoids uid/gid permission issues — no bind mount for outputs,
+no `chmod` workarounds needed. If a container dies too violently for `docker cp`
+(e.g., OOM kill), the output is lost but the work is re-runnable.
 
 ## Security Hardening
 
@@ -148,6 +135,12 @@ Containers are intentionally locked down:
 - **Read-only root filesystem** — `--read-only`
 - **Memory limit** — 8 GB RAM + 16 GB swap, 500 PID limit
 - **tmpfs mounts** — `/tmp` is tmpfs with `noexec,nosuid`
+
+## Cleanup
+
+`./run.sh --cleanup` is deliberately narrow: it removes only containers named
+`swe_*` and images whose repository begins with `swebench/sweb.`. It does not
+prune or remove unrelated Docker resources.
 
 ## Configuration
 

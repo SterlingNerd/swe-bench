@@ -11,7 +11,10 @@
 #
 # Container mounts (provided by swebench harness):
 #   /agent    → agent bundle (read-only) — Node.js + pi CLI + config
-#   /workspace→ writable workspace directory (outputs go here)
+#
+# Environment variables:
+#   SWE_OUTPUT_ROOT  Output root directory (default: /workspace/outputs)
+#   SWE_AGENT_NAME   Agent name for metadata (default: pi)
 # ==============================================================================
 
 set -euo pipefail
@@ -41,7 +44,8 @@ fi
 INSTANCE_ID="${1:?Usage: $0 <instance_id> <repo_url> <base_commit> <problem_statement>}"
 
 # --- Setup paths ---
-OUTPUT_DIR="/workspace/outputs/${INSTANCE_ID}"
+OUTPUT_ROOT="${SWE_OUTPUT_ROOT:-/workspace/outputs}"
+OUTPUT_DIR="${OUTPUT_ROOT}/${INSTANCE_ID}"
 REPOS_DIR="/tmp/repos"
 NODE_BIN="${AGENT_BUNDLE}/bin"
 
@@ -63,19 +67,17 @@ PROBLEM_STATEMENT="${4:?Missing problem_statement}"
 # --- Setup output dir ---
 mkdir -p "${OUTPUT_DIR}/eval"
 
-# Verification: write hello world
-echo "Hello from pi container at $(date)" > "${OUTPUT_DIR}/hello.txt"
-
 # Save problem metadata (use python3 for proper JSON escaping)
 python3 -c "
 import json, sys
 meta = {
     'instance_id': sys.argv[1],
     'repo_url': sys.argv[2],
-    'base_commit': sys.argv[3]
+    'base_commit': sys.argv[3],
+    'agent': sys.argv[5]
 }
 json.dump(meta, open(sys.argv[4], 'w'))
-" "${INSTANCE_ID}" "${REPO_URL}" "${BASE_COMMIT}" "${OUTPUT_DIR}/meta.json"
+" "${INSTANCE_ID}" "${REPO_URL}" "${BASE_COMMIT}" "${OUTPUT_DIR}/meta.json" "${SWE_AGENT_NAME:-pi}"
 echo "${PROBLEM_STATEMENT}" > "${OUTPUT_DIR}/problem_statement.txt"
 
 # Use swebench's /testbed (repo already at base commit)
@@ -89,29 +91,52 @@ AGENT_OUTPUT="${OUTPUT_DIR}/agent_output.txt"
 SESSION_DIR="${OUTPUT_DIR}/pi-sessions"
 mkdir -p "${SESSION_DIR}"
 
-pi -p --session-dir "${SESSION_DIR}" "${PROBLEM_STATEMENT}" 2>&1 | tee "${AGENT_OUTPUT}" || {
-    echo "  WARNING: pi exited with non-zero status"
-}
+set +e
+pi -p --session-dir "${SESSION_DIR}" "${PROBLEM_STATEMENT}" 2>&1 | tee "${AGENT_OUTPUT}"
+AGENT_EXIT_CODE=${PIPESTATUS[0]}
+set -e
+if [ "$AGENT_EXIT_CODE" -ne 0 ]; then
+    echo "  WARNING: pi exited with status ${AGENT_EXIT_CODE}"
+fi
 
 # Extract patch via git diff (from inside the repo)
 # Must stage new/untracked files first — git diff alone drops them
 echo "  Extracting patch..."
 git add -A 2>/dev/null || true
-git diff --cached > "${OUTPUT_DIR}/patch.diff" 2>/dev/null || {
+git diff --binary "$BASE_COMMIT" > "${OUTPUT_DIR}/patch.diff" 2>/dev/null || {
     echo "  WARNING: git diff failed"
     touch "${OUTPUT_DIR}/patch.diff"
 }
 
 PATCH_SIZE=$(wc -c < "${OUTPUT_DIR}/patch.diff" 2>/dev/null || echo 0)
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
 
-if [ "$PATCH_SIZE" -eq 0 ]; then
-    echo "  WARNING: No patch generated (0 bytes)"
-    echo '{"status": "no_patch", "patch_bytes": 0}' > "${OUTPUT_DIR}/result.json"
-else
+if [ "$PATCH_SIZE" -gt 0 ]; then
+    STATUS="patch_collected"
     echo "  Patch collected (${PATCH_SIZE} bytes)."
-    END_TIME=$(date +%s)
-    ELAPSED=$((END_TIME - START_TIME))
-    echo "{\"status\": \"patch_collected\", \"patch_bytes\": ${PATCH_SIZE}, \"elapsed_seconds\": ${ELAPSED}}" > "${OUTPUT_DIR}/result.json"
+elif [ "$AGENT_EXIT_CODE" -ne 0 ]; then
+    STATUS="agent_error"
+    echo "  ERROR: Agent failed without generating a patch."
+else
+    STATUS="no_patch"
+    echo "  WARNING: No patch generated (0 bytes)"
 fi
+
+RESULT_STATUS="$STATUS" PATCH_SIZE="$PATCH_SIZE" ELAPSED="$ELAPSED" \
+    AGENT_EXIT_CODE="$AGENT_EXIT_CODE" RESULT_FILE="${OUTPUT_DIR}/result.json" \
+    python3 - <<'PY'
+import json
+import os
+
+result = {
+    "status": os.environ["RESULT_STATUS"],
+    "patch_bytes": int(os.environ["PATCH_SIZE"]),
+    "elapsed_seconds": int(os.environ["ELAPSED"]),
+    "agent_exit_code": int(os.environ["AGENT_EXIT_CODE"]),
+}
+with open(os.environ["RESULT_FILE"], "w") as handle:
+    json.dump(result, handle, indent=2)
+PY
 
 echo "  Output: ${OUTPUT_DIR}/"
