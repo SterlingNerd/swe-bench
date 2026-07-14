@@ -31,6 +31,16 @@
 set -euo pipefail
 
 # ==============================================================================
+# SINGLE INSTANCE LOCK — ensure only one instance of this script runs at a time
+# ==============================================================================
+LOCK_FILE="/tmp/swe-bench-run.lock"
+exec 200>"$LOCK_FILE"
+if ! flock -n 200; then
+    echo "ERROR: Another instance is already running (lock: ${LOCK_FILE})"
+    exit 1
+fi
+
+# ==============================================================================
 # CLEANUP — docker --rm handles container removal on exit
 # ==============================================================================
 
@@ -76,6 +86,25 @@ do_cleanup() {
     docker rm -f $(docker ps -aq) 2>/dev/null || true
     docker rmi $(docker images -q) 2>/dev/null || true
     echo "=== Cleanup complete ==="
+}
+
+do_cleanup_partial() {
+    echo "=== Cleaning up partial/empty output directories ==="
+    local removed=0 kept=0
+    [ -d "$OUTPUT_DIR" ] || { echo "No outputs directory found."; return 0; }
+    for d in "${OUTPUT_DIR}"/*/; do
+        [ -d "$d" ] || continue
+        local iid=$(basename "$d")
+        # Skip if it has a complete result
+        if [ -f "${d}result.json" ] && [ -f "${d}patch.diff" ]; then
+            kept=$((kept + 1))
+            continue
+        fi
+        echo "  Removing: ${iid}/"
+        rm -rf "$d"
+        removed=$((removed + 1))
+    done
+    echo "=== Removed ${removed}, kept ${kept} complete ==="
 }
 
 # Save swebench image to cache (NAS/external storage)
@@ -236,6 +265,11 @@ COMMANDS
   --cleanup
       Stop and remove all Docker containers and images. Run this when disk
       space is running low (default threshold: 80%).
+
+  --cleanup-partial
+      Remove output directories that are missing result.json or patch.diff
+      (i.e., failed or interrupted runs). Keeps complete runs intact so you
+      can inspect their debug files (agent_output.txt, pi-sessions/) first.
 
 ENVIRONMENT
   SWEBENCH_IMAGE_CACHE
@@ -904,6 +938,9 @@ case "$1" in
         ;;
     --cleanup)
         do_cleanup
+        ;;
+    --cleanup-partial)
+        do_cleanup_partial
         ;;
     *)
         echo "Unknown option: $1"
