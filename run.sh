@@ -568,46 +568,8 @@ do_run_all() {
             fi
         fi
 
-        # Pre-create output directory
-        mkdir -p "${OUTPUT_DIR}/${instance_id}"
-        chmod 777 "${OUTPUT_DIR}/${instance_id}"
-        # Run with timeout if specified, otherwise run normally
-        if [ -n "$timeout_sec" ]; then
-            local cidfile="/tmp/swe_${agent}_${instance_id}.cid"
-            local image_name
-            image_name=$(instance_to_image "$instance_id")
-            local inst_data repo_url base_commit problem_statement
-            inst_data=$(get_instance "$instance_id")
-            repo_url=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['repo'])")
-            base_commit=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['base_commit'])")
-            problem_statement=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['problem_statement'])")
-
-            # Run docker with timeout wrapper
-            ( docker run --rm \
-                --name "swe_${agent}_${instance_id}" \
-                "${DOCKER_RUN_FLAGS[@]}" \
-                -v "${WORKSPACE_DIR}:/workspace:rw" \
-                -v "${AGENTS_DIR}/${agent}/bundle:/agent:ro" \
-                --cidfile "$cidfile" \
-                "$image_name" \
-                /agent/entrypoint.sh \
-                "${instance_id}" \
-                "https://github.com/${repo_url}" \
-                "${base_commit}" \
-                "${problem_statement}"
-            ) &
-            DOCKER_PID=$!
-            # Start timeout watcher
-            ( sleep "${timeout_sec}" && docker kill "swe_${agent}_${instance_id}" 2>/dev/null ) &
-            WATCHER_PID=$!
-            # Wait for docker to finish
-            wait "$DOCKER_PID" 2>/dev/null || true
-            # Kill watcher if still running
-            kill "$WATCHER_PID" 2>/dev/null || true
-            rm -f "$cidfile"
-        else
-            do_run "$agent" "$instance_id"
-        fi
+        # Run instance (do_run handles output dir creation)
+        do_run "$agent" "$instance_id"
     done < <(fetch_dataset | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
