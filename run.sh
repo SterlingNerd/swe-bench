@@ -600,9 +600,9 @@ do_run_all() {
             # Wait with timeout, kill container if exceeded
             ( sleep "${timeout_sec}" && docker kill "swe_${agent}_${instance_id}" 2>/dev/null ) &
             WAIT_PID=$!
-            wait "$DOCKER_PID" 2>/dev/null
+            # Wait for docker to finish or timeout to expire
+            wait "$DOCKER_PID" 2>/dev/null || true
             kill "$WAIT_PID" 2>/dev/null || true
-            wait "$WAIT_PID" 2>/dev/null || true
             rm -f "$cidfile"
         else
             do_run "$agent" "$instance_id"
