@@ -547,6 +547,20 @@ for inst in data:
 " > "$inst_file"
     # Get all instance IDs
     while read -r instance_id; do
+        echo "=== Processing: ${instance_id} ==="
+        # Ensure we wait for previous container to finish before starting next
+        local retries=0
+        while docker ps --format "{{.Names}}" | grep -q "swe_${agent}_"; do
+            if [ $retries -gt 0 ]; then
+                echo "  Waiting for previous container to finish..."
+            fi
+            sleep 5
+            retries=$((retries + 1))
+            if [ $retries -gt 60 ]; then
+                echo "  ERROR: Too many retries, breaking"
+                break
+            fi
+        done
         # Resume: skip instances that already have a result.json
         if [ "$resume" = 1 ] && [ -f "${OUTPUT_DIR}/${instance_id}/result.json" ]; then
             skipped=$((skipped + 1))
