@@ -568,11 +568,11 @@ do_run_all() {
             fi
         fi
 
+        # Pre-create output directory
+        mkdir -p "${OUTPUT_DIR}/${instance_id}"
+        chmod 777 "${OUTPUT_DIR}/${instance_id}"
+        # Run with timeout if specified, otherwise run normally
         if [ -n "$timeout_sec" ]; then
-            # Pre-create output directory
-            mkdir -p "${OUTPUT_DIR}/${instance_id}"
-            chmod 777 "${OUTPUT_DIR}/${instance_id}"
-            # Run with timeout — kill container if it exceeds limit
             local cidfile="/tmp/swe_${agent}_${instance_id}.cid"
             local image_name
             image_name=$(instance_to_image "$instance_id")
