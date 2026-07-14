@@ -1,0 +1,21 @@
+# This user-level config is copied to an ephemeral CODEX_HOME in the container.
+model = "qwen3.6-35b-a3b"
+model_provider = "local_swebench"
+model_reasoning_effort = "high"
+model_reasoning_summary = "none"
+model_supports_reasoning_summaries = false
+model_context_window = 256000
+model_auto_compact_token_limit = 230400
+personality = "none"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+web_search = "disabled"
+
+[model_providers.local_swebench]
+name = "Local llama.cpp"
+base_url = "http://host.docker.internal:11434/v1"
+env_key = "SWE_CODEX_API_KEY"
+wire_api = "responses"
+request_max_retries = 2
+stream_max_retries = 2
+stream_idle_timeout_ms = 300000

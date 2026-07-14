@@ -2,8 +2,8 @@
 
 Run self-contained coding-agent bundles against **SWE-bench Verified** tasks,
 collect patches, and evaluate them with the official SWE-bench harness. The
-included `pi` adapter uses the same local llama.cpp model so results can be
-compared across agents without sharing output state.
+included `pi` and `codex` adapters can be compared without sharing output
+state.
 
 ## Architecture
 
@@ -30,20 +30,23 @@ per-instance SWE-bench image. The image's repository is already checked out at
   under **Settings > Resources > WSL Integration**.
 - A local OpenAI-compatible model server reachable from containers at
   `http://host.docker.internal:11434/v1`.
-- The configured model id is `qwen3.6-35b-a3b`, with the intentionally fake
-  bearer token `local-key`.
+- For Codex, the server must implement the streaming Responses API at
+  `POST /v1/responses`.
+- The default model id is `qwen3.6-35b-a3b`, with the intentionally fake bearer
+  token `local-key`.
 
-Verify Docker from the same WSL shell before running the harness:
+Verify Docker and the model server before launching an agent:
 
 ```bash
 docker version
 docker run --rm hello-world
+curl -fsS http://localhost:11434/v1/models
 ```
 
 If `/usr/bin/docker` starts returning an I/O error even though integration was
 already enabled, quit Docker Desktop, run `wsl --shutdown` in Windows
 PowerShell, reopen Docker Desktop, wait for it to report that the engine is
-running, then reopen Ubuntu and repeat the two Docker checks above.
+running, then reopen Ubuntu and repeat the Docker checks above.
 
 ## Quick Start
 
@@ -94,6 +97,8 @@ workspace/outputs/<agent>/<instance_id>/
 ├── meta.json                 # Instance, agent, repository, and base commit
 ├── problem_statement.txt     # Original SWE-bench issue
 ├── agent_output.txt          # Agent's final/plain output
+├── agent_stderr.txt          # Codex diagnostics (Codex only)
+├── trajectory.jsonl          # Codex JSONL event stream (Codex only)
 ├── pi-sessions/              # Pi session state (Pi only)
 ├── patch.diff                # Binary-safe staged diff, including new files
 ├── result.json               # Run status, timings, exit codes, evaluation
@@ -112,29 +117,45 @@ being mistaken for, overwritten by, or evaluated as a Codex run.
 ## Container Runtime
 
 Each instance has a pre-built swebench image:
-```
+
+```text
 swebench/sweb.eval.x86_64.django_1776_django-7530:latest
 ```
 
 `run.sh` spins up that image with:
+
 1. Agent bundle mounted read-only at `/agent`
 2. Outputs written to internal `/workspace/outputs/<agent>/<instance_id>/`
 3. Cached repos in `/tmp/repos` (tmpfs, ephemeral)
 4. Calls `/agent/entrypoint.sh` as the container command
 
 After the container exits, `run.sh` uses `docker cp` to copy outputs out to
-the host. This avoids uid/gid permission issues — no bind mount for outputs,
-no `chmod` workarounds needed. If a container dies too violently for `docker cp`
-(e.g., OOM kill), the output is lost but the work is re-runnable.
+the host. This avoids uid/gid permission issues. If a container dies too
+violently for `docker cp` (for example, an OOM kill), the output may be lost.
+
+## Codex Adapter
+
+`agents/codex/build_bundle.sh` downloads the official pinned Codex CLI package
+for the current CPU architecture and verifies its SHA-256 digest before
+extracting it. The bundle includes Codex, its sandbox helper, and ripgrep.
+
+The entrypoint creates an ephemeral `CODEX_HOME`, loads the Responses API
+provider, runs `codex exec --ephemeral --json`, and captures the final message
+plus the full JSONL trajectory. It never mounts or copies host ChatGPT/OpenAI
+credentials into the benchmark container.
+
+Codex's nested sandbox cannot create namespaces under the Docker policy, so the
+CLI runs with its internal approvals and sandbox bypassed. The disposable
+Docker container is the security boundary, matching Pi's execution model.
+Avoid replacing the fake local token with host credentials or mounting private
+host paths into these containers.
 
 ## Security Hardening
 
-Containers are intentionally locked down:
-- **Dropped all capabilities** — no extra caps added
-- **No new privileges** — `no-new-privileges:true`
-- **Read-only root filesystem** — `--read-only`
-- **Memory limit** — 8 GB RAM + 16 GB swap, 500 PID limit
-- **tmpfs mounts** — `/tmp` is tmpfs with `noexec,nosuid`
+Runtime containers have an 8 GB memory limit, a 16 GB memory-plus-swap limit,
+a 500 PID limit, all Linux capabilities dropped, and `no-new-privileges`
+enabled. The agent bundle is read-only, while `/testbed`, `/workspace`, and the
+`/tmp` tmpfs remain writable as required by coding agents and test suites.
 
 ## Cleanup
 
@@ -145,8 +166,16 @@ prune or remove unrelated Docker resources.
 ## Configuration
 
 ### LlamaCPP / Local Model
+
 - **Endpoint:** `http://host.docker.internal:11434/v1` (from inside Docker)
 - **API Key:** `local-key` — bogus/fake key, safe to publish
 
+Run the host-side regression checks with:
+
+```bash
+bash tests/test_harness.sh
+```
+
 ## Git Remote
+
 - **origin:** https://github.com/SterlingNerd/swe-bench.git
