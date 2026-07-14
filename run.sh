@@ -582,25 +582,27 @@ do_run_all() {
             base_commit=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['base_commit'])")
             problem_statement=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['problem_statement'])")
 
-            docker run --rm \
-                --name "swe_${agent}_${instance_id}" \
-                "${DOCKER_RUN_FLAGS[@]}" \
-                -v "${WORKSPACE_DIR}:/workspace:rw" \
-                -v "${AGENTS_DIR}/${agent}/bundle:/agent:ro" \
-                --cidfile "$cidfile" \
-                "$image_name" \
-                /agent/entrypoint.sh \
-                "${instance_id}" \
-                "https://github.com/${repo_url}" \
-                "${base_commit}" \
-                "${problem_statement}" &
+            (
+                docker run --rm \
+                    --name "swe_${agent}_${instance_id}" \
+                    "${DOCKER_RUN_FLAGS[@]}" \
+                    -v "${WORKSPACE_DIR}:/workspace:rw" \
+                    -v "${AGENTS_DIR}/${agent}/bundle:/agent:ro" \
+                    --cidfile "$cidfile" \
+                    "$image_name" \
+                    /agent/entrypoint.sh \
+                    "${instance_id}" \
+                    "https://github.com/${repo_url}" \
+                    "${base_commit}" \
+                    "${problem_statement}"
+            ) &
             DOCKER_PID=$!
-            if ! timeout "${timeout_sec}" bash -c "wait $DOCKER_PID" 2>/dev/null; then
-                # Timeout expired — kill the container
-                local cid=$(cat "$cidfile" 2>/dev/null)
-                [ -n "$cid" ] && docker kill "$cid" 2>/dev/null || true
-                echo "  TIMEOUT: ${instance_id}"
-            fi
+            # Wait with timeout, kill container if exceeded
+            ( sleep "${timeout_sec}" && docker kill "swe_${agent}_${instance_id}" 2>/dev/null ) &
+            WAIT_PID=$!
+            wait "$DOCKER_PID" 2>/dev/null
+            kill "$WAIT_PID" 2>/dev/null || true
+            wait "$WAIT_PID" 2>/dev/null || true
             rm -f "$cidfile"
         else
             do_run "$agent" "$instance_id"
