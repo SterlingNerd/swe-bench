@@ -548,16 +548,17 @@ for inst in data:
     # Get all instance IDs
     while read -r instance_id; do
         echo "=== Processing: ${instance_id} ==="
-        # Ensure we wait for previous container to finish before starting next
-        local retries=0
+        # Wait for any running swe containers to finish
+        local wait_count=0
         while docker ps --format "{{.Names}}" | grep -q "swe_${agent}_"; do
-            if [ $retries -gt 0 ]; then
-                echo "  Waiting for previous container to finish..."
+            if [ $wait_count -gt 0 ] && [ $((wait_count % 6)) -eq 0 ]; then
+                echo "  Waiting for container to finish... (${wait_count}s)"
             fi
-            sleep 5
-            retries=$((retries + 1))
-            if [ $retries -gt 60 ]; then
-                echo "  ERROR: Too many retries, breaking"
+            sleep 1
+            wait_count=$((wait_count + 1))
+            if [ $wait_count -gt 3600 ]; then
+                echo "  ERROR: Timeout waiting for container, killing all swe containers"
+                docker ps --format "{{.Names}}" | grep "swe_${agent}_" | xargs -I {} docker stop {} 2>/dev/null || true
                 break
             fi
         done
