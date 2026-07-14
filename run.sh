@@ -572,7 +572,7 @@ do_run_all() {
             # Pre-create output directory
             mkdir -p "${OUTPUT_DIR}/${instance_id}"
             chmod 777 "${OUTPUT_DIR}/${instance_id}"
-            # Run detached with cidfile so timeout can kill the container
+            # Run with timeout — kill container if it exceeds limit
             local cidfile="/tmp/swe_${agent}_${instance_id}.cid"
             local image_name
             image_name=$(instance_to_image "$instance_id")
@@ -582,27 +582,28 @@ do_run_all() {
             base_commit=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['base_commit'])")
             problem_statement=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['problem_statement'])")
 
-            (
-                docker run --rm \
-                    --name "swe_${agent}_${instance_id}" \
-                    "${DOCKER_RUN_FLAGS[@]}" \
-                    -v "${WORKSPACE_DIR}:/workspace:rw" \
-                    -v "${AGENTS_DIR}/${agent}/bundle:/agent:ro" \
-                    --cidfile "$cidfile" \
-                    "$image_name" \
-                    /agent/entrypoint.sh \
-                    "${instance_id}" \
-                    "https://github.com/${repo_url}" \
-                    "${base_commit}" \
-                    "${problem_statement}"
+            # Run docker with timeout wrapper
+            ( docker run --rm \
+                --name "swe_${agent}_${instance_id}" \
+                "${DOCKER_RUN_FLAGS[@]}" \
+                -v "${WORKSPACE_DIR}:/workspace:rw" \
+                -v "${AGENTS_DIR}/${agent}/bundle:/agent:ro" \
+                --cidfile "$cidfile" \
+                "$image_name" \
+                /agent/entrypoint.sh \
+                "${instance_id}" \
+                "https://github.com/${repo_url}" \
+                "${base_commit}" \
+                "${problem_statement}"
             ) &
             DOCKER_PID=$!
-            # Wait with timeout, kill container if exceeded
+            # Start timeout watcher
             ( sleep "${timeout_sec}" && docker kill "swe_${agent}_${instance_id}" 2>/dev/null ) &
-            WAIT_PID=$!
-            # Wait for docker to finish or timeout to expire
+            WATCHER_PID=$!
+            # Wait for docker to finish
             wait "$DOCKER_PID" 2>/dev/null || true
-            kill "$WAIT_PID" 2>/dev/null || true
+            # Kill watcher if still running
+            kill "$WATCHER_PID" 2>/dev/null || true
             rm -f "$cidfile"
         else
             do_run "$agent" "$instance_id"
