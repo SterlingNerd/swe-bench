@@ -562,6 +562,8 @@ for inst in data:
                 break
             fi
         done
+        # Double check — kill any remaining containers from previous runs
+        docker ps --format "{{.Names}}" | grep "swe_${agent}_" | xargs -I {} docker stop {} 2>/dev/null || true
         # Resume: skip instances that already have a result.json
         if [ "$resume" = 1 ] && [ -f "${OUTPUT_DIR}/${instance_id}/result.json" ]; then
             skipped=$((skipped + 1))
