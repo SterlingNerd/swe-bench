@@ -1,10 +1,14 @@
 #!/bin/bash
 # ==============================================================================
-# SWE-bench Orchestrator — unified build, index, list, run, and eval
+# SWE-bench Orchestrator — unified build, index, work, and eval
 #
 # Architecture: Self-contained agent bundles mounted into swebench eval images.
 # Each instance has a pre-built swebench image; we mount the bundle read-only
 # at /agent. Outputs are written inside the container and copied out via docker cp.
+#
+# Two phases:
+#   [WORK]  --run / --run-all    Run agents against instances (collect patches)
+#   [EVAL]  --eval               Evaluate collected patches via swebench harness
 #
 # Usage:
 #   ./run.sh --help              Show this help
@@ -12,9 +16,9 @@
 #   ./run.sh --list [filter]     List problems (optional grep filter)
 #   ./run.sh --build [agent]     Build agent bundle(s) only
 #   ./run.sh --rebuild [scope] Rebuild from scratch (--no-cache): all|<agent>
-#   ./run.sh --run <agent> <id>         Run agent against a specific instance
-#   ./run.sh --run-all <agent> [--timeout N] [--resume]
-#   ./run.sh --eval <agent>             Evaluate collected patches
+#   ./run.sh --run <agent> <id>         [WORK] Run agent against a specific instance
+#   ./run.sh --run-all <agent> [--timeout N] [--resume]  [WORK] Run all instances
+#   ./run.sh --eval <agent>             [EVAL] Evaluate collected patches
 #   ./run.sh --summarize [agent]        Combine and summarize results
 #   ./run.sh --status [agent]           Show completion status
 #   ./run.sh --interactive <agent> <id> Drop into an agent's eval image
@@ -23,27 +27,13 @@
 # Workflow:
 #   1. ./run.sh --index          (one-time: cache the dataset)
 #   2. ./run.sh --build          (build agent bundles — no Docker images)
-#   3. ./run.sh --run <agent> <id>  (spins up swebench image, mounts our bundle)
+#   3. ./run.sh --run <agent> <id>  [WORK] spins up swebench image, mounts our bundle
 #   4. ./run.sh --init           (install swebench harness — one-time)
-#   5. ./run.sh --eval <agent>   (evaluate collected patches via official harness)
+#   5. ./run.sh --eval <agent>   [EVAL] evaluate collected patches via official harness
 #   6. ./run.sh --status         (inspect results)
 # ==============================================================================
 
 set -euo pipefail
-
-# ==============================================================================
-# SINGLE INSTANCE LOCK — ensure only one instance of this script runs at a time
-# ==============================================================================
-LOCK_FILE="/tmp/swe-bench-run.lock"
-exec 200>"$LOCK_FILE"
-if ! flock -n 200; then
-    echo "ERROR: Another instance is already running (lock: ${LOCK_FILE})"
-    exit 1
-fi
-
-# ==============================================================================
-# CLEANUP — docker --rm handles container removal on exit
-# ==============================================================================
 
 # ==============================================================================
 # CONFIGURATION
@@ -55,6 +45,44 @@ OUTPUT_DIR="${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}/outputs"
 WORKSPACE_DIR="${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}"
 CACHE_FILE="/tmp/swe_verified_cache.json"
 HF_DATASET="princeton-nlp/SWE-bench_Verified"
+
+# ==============================================================================
+# LOG FILE — tee all output here for reference
+# ==============================================================================
+LOG_FILE="${WORKSPACE_DIR}/run.log"
+mkdir -p "$(dirname "$LOG_FILE")"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+# ==============================================================================
+# EXIT HANDLER — clean ^C / ERR / EXIT
+# ==============================================================================
+EXITING=0
+cleanup_on_exit() {
+    [ "$EXITING" -eq 1 ] && return
+    EXITING=1
+    echo ""
+    echo "=============================================================================="
+    echo "  ^C received — shutting down..."
+    echo "=============================================================================="
+    # Kill any running swe containers
+    docker ps --format '{{.Names}}' | grep '^swe_' | while read -r cname; do
+        echo "  Stopping container: ${cname}"
+        docker stop "$cname" >/dev/null 2>&1 || true
+    done
+    echo "  Cleanup complete. Goodbye."
+    echo "=============================================================================="
+}
+trap cleanup_on_exit INT TERM EXIT
+
+# ==============================================================================
+# SINGLE INSTANCE LOCK — ensure only one instance of this script runs at a time
+# ==============================================================================
+LOCK_FILE="/tmp/swe-bench-run.lock"
+exec 200>"$LOCK_FILE"
+if ! flock -n 200; then
+    echo "ERROR: Another instance is already running (lock: ${LOCK_FILE})"
+    exit 1
+fi
 
 # SWE-bench image registry
 SWEBENCH_REGISTRY="swebench"
@@ -291,22 +319,22 @@ COMMANDS
         <agent>     only that agent bundle
       Use this to upgrade pi or refresh cached layers. Skips nothing.
 
-  --run <AGENT> <INSTANCE_ID> [TIMEOUT]
+  --run <AGENT> <INSTANCE_ID> [TIMEOUT]    [WORK]
       Run an agent against a single instance. AGENT is a folder name under
       agents/ (e.g. pi, codex). INSTANCE_ID is like django__django-11039.
       Optional TIMEOUT overrides the default 3600s per-instance timeout.
       Spins up the swebench eval image for that instance, mounts our agent
       bundle read-only at /agent, and calls entrypoint.sh inside it.
-      Results are written to <workspace>/outputs/<AGENT>/<INSTANCE_ID>/.
+      Results are written to <workspace>/outputs/<AGENT>/<INSTANCE_ID>/. 
 
-  --run-all <AGENT> [--timeout N] [--resume]
+  --run-all <AGENT> [--timeout N] [--resume]    [WORK]
       Run an agent against every cached instance (all 500 verified instances),
-      collecting one patch per instance under <workspace>/outputs/<AGENT>/.
+      collecting one patch per instance under <workspace>/outputs/<AGENT>/. 
       --timeout N  Kill containers exceeding N seconds (default: 3600 = 1 hour)
       --resume     Skip instances that already have a result.json
       Long-running: consider running in the background.
 
-  --eval <AGENT>
+  --eval <AGENT>    [EVAL]
       Evaluate the patches collected for AGENT in a previous run using the
       official swebench harness. Requires Docker (pulls eval images per
       instance) and network access. Run './run.sh --init' first to install
@@ -525,10 +553,10 @@ instance_to_image() {
 }
 
 # ==============================================================================
-# RUN — run an agent against a specific instance
+# WORK — run an agent against a specific instance
 #
-# Spins up the swebench eval image for this instance, mounts our agent bundle
-# read-only at /agent, and calls entrypoint.sh inside it.
+# This is the "work" phase: spins up the swebench eval image for this instance,
+# mounts our agent bundle read-only at /agent, and calls entrypoint.sh inside it.
 # ==============================================================================
 DOCKER_RUN_FLAGS=(
     --memory 8g
@@ -606,8 +634,8 @@ do_run() {
 
     # Run the agent container
     echo "=============================================================================="
-    echo "Running: ${agent} against ${instance_id}"
-    echo "Image: ${image_name}"
+    echo "  [WORK] Running: ${agent} against ${instance_id}"
+    echo "         Image: ${image_name}"
     echo "=============================================================================="
 
     local container_name="swe_${agent}_${instance_id}"
@@ -709,7 +737,7 @@ do_run() {
 }
 
 # ==============================================================================
-# RUN-ALL — run agent against all instances
+# WORK-ALL — run agent against all instances
 #
 # Usage: ./run.sh --run-all <agent> [--timeout <seconds>] [--resume]
 #   --timeout N  Kill containers that exceed N seconds (default: 3600 = 1 hour)
@@ -752,7 +780,9 @@ for inst in data:
     fi
     # Get all instance IDs
     while read -r instance_id; do
-        echo "=== Processing: ${instance_id} ==="
+        echo "=============================================================================="
+        echo "  [WORK] Processing: ${instance_id}"
+        echo "=============================================================================="
         # Wait for any running swe containers to finish
         local wait_count=0
         while docker ps --format "{{.Names}}" | grep -q "swe_${agent}_"; do
@@ -862,7 +892,7 @@ print(f'Wrote {len(results)} predictions to {os.environ[\"PREDS\"]}')
 " "${instance_ids[@]}"
 
     echo "=============================================================================="
-    echo "Running swebench harness on ${#instance_ids[@]} patch(es) for '${agent}'"
+    echo "  [EVAL] Running swebench harness on ${#instance_ids[@]} patch(es) for '${agent}'"
     echo "=============================================================================="
 
     # Run the official swebench harness from the selected agent's output tree.
