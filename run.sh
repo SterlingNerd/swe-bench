@@ -291,9 +291,10 @@ COMMANDS
         <agent>     only that agent bundle
       Use this to upgrade pi or refresh cached layers. Skips nothing.
 
-  --run <AGENT> <INSTANCE_ID>
+  --run <AGENT> <INSTANCE_ID> [TIMEOUT]
       Run an agent against a single instance. AGENT is a folder name under
       agents/ (e.g. pi, codex). INSTANCE_ID is like django__django-11039.
+      Optional TIMEOUT overrides the default 3600s per-instance timeout.
       Spins up the swebench eval image for that instance, mounts our agent
       bundle read-only at /agent, and calls entrypoint.sh inside it.
       Results are written to <workspace>/outputs/<AGENT>/<INSTANCE_ID>/.
@@ -364,6 +365,7 @@ EXAMPLES
   $(basename "$0") --rebuild           # force fresh build of all bundles (latest pi CLI)
   $(basename "$0") --rebuild pi        # rebuild only the 'pi' agent bundle
   $(basename "$0") --run pi django__django-11039
+  $(basename "$0") --run pi django__django-11039 1800   # 30 min timeout
   $(basename "$0") --run-all pi
   $(basename "$0") --eval pi
   $(basename "$0") --status pi
@@ -664,9 +666,16 @@ do_run() {
     fi
 
     mkdir -p "$instance_output_dir"
+    local cp_ok=0
     if docker cp "${container_name}:/workspace/outputs/${agent}/${instance_id}/" \
                  "${instance_output_dir}/" 2>/dev/null; then
-        echo "  Copied outputs from container."
+        # Verify that the copy actually produced output files.
+        if [ -f "${instance_output_dir}/result.json" ] || [ -f "${instance_output_dir}/patch.diff" ]; then
+            echo "  Copied outputs from container."
+            cp_ok=1
+        else
+            echo "  WARNING: Copy succeeded but no output files found in container."
+        fi
     else
         case "$container_state" in
             dead|error)
@@ -681,6 +690,21 @@ do_run() {
     # Clean up the container
     docker rm -f "$container_name" >/dev/null 2>&1 || true
 
+    # If we couldn't copy outputs, treat as failure.
+    if [ "$cp_ok" -eq 0 ]; then
+        return 1
+    fi
+
+    # Check result.json for failure statuses — do_run_all relies on this return code.
+    local final_status
+    final_status=$(RESULT_FILE="${instance_output_dir}/result.json" python3 -c \
+        "import json, os; print(json.load(open(os.environ['RESULT_FILE'])).get('status', 'unknown'))" \
+        2>/dev/null || echo "unknown")
+    case "$final_status" in
+        agent_error|container_error|timed_out|invalid_result)
+            return 1
+            ;;
+    esac
     return 0
 }
 
@@ -1131,7 +1155,7 @@ main() {
             do_rebuild "${2:-}"
             ;;
         --run)
-            do_run "${2:-}" "${3:-}"
+            do_run "${2:-}" "${3:-}" "${4:-}"
             ;;
         --run-all)
             do_run_all "${@:2}"
