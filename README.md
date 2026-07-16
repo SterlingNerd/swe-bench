@@ -152,7 +152,7 @@ host paths into these containers.
 
 ## Security Hardening
 
-Runtime containers have an 8 GB memory limit, a 16 GB memory-plus-swap limit,
+Runtime containers have a 32 GB memory limit, a 64 GB memory-plus-swap limit,
 a 500 PID limit, all Linux capabilities dropped, and `no-new-privileges`
 enabled. The agent bundle is read-only, while `/testbed`, `/workspace`, and the
 `/tmp` tmpfs remain writable as required by coding agents and test suites.
