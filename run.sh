@@ -597,6 +597,31 @@ DOCKER_RUN_FLAGS=(
     --add-host host.docker.internal:host-gateway
 )
 
+append_agent_runtime_env() {
+    local agent="$1"
+    local args_name="$2"
+    local -n args_ref="$args_name"
+    [ "$agent" = "codex" ] || return 0
+
+    local name
+    for name in \
+        SWE_CODEX_MODEL \
+        SWE_CODEX_BASE_URL \
+        SWE_CODEX_API_KEY \
+        SWE_CODEX_CONTEXT_WINDOW \
+        SWE_CODEX_AUTO_COMPACT_TOKEN_LIMIT; do
+        if [ -n "${!name:-}" ]; then
+            if [ "$name" = "SWE_CODEX_API_KEY" ]; then
+                # Let Docker copy the value from the host environment without
+                # placing the secret itself in this process's argument list.
+                args_ref+=(-e "$name")
+            else
+                args_ref+=(-e "${name}=${!name}")
+            fi
+        fi
+    done
+}
+
 do_run() {
     local agent="${1:?Usage: $0 --run <agent> <instance_id>}"
     local instance_id="${2:?Usage: $0 --run <agent> <instance_id>}"
@@ -679,6 +704,9 @@ do_run() {
         "${DOCKER_RUN_FLAGS[@]}"
         -e "SWE_AGENT_NAME=${agent}"
         -e "SWE_OUTPUT_ROOT=/workspace/outputs/${agent}"
+    )
+    append_agent_runtime_env "$agent" docker_command
+    docker_command+=(
         -v "${bundle_dir}:/agent:ro"
         -v "${agent_output_root}:/workspace/outputs"
         "$image_name"
@@ -1199,6 +1227,9 @@ do_interactive() {
         "${DOCKER_RUN_FLAGS[@]}"
         -e "SWE_AGENT_NAME=${agent}"
         -e "SWE_OUTPUT_ROOT=/workspace/outputs/${agent}"
+    )
+    append_agent_runtime_env "$agent" docker_command
+    docker_command+=(
         -v "${WORKSPACE_DIR}:/workspace:rw"
         -v "${bundle_dir}:/agent:ro"
         "$image_name"

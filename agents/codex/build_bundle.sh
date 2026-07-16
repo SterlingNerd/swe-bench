@@ -4,16 +4,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="${1:-${SCRIPT_DIR}/bundle}"
-CODEX_VERSION="0.144.3"
+CODEX_VERSION="0.144.4"
 
 case "$(uname -m)" in
     x86_64)
         TARGET="x86_64-unknown-linux-musl"
-        PACKAGE_SHA256="1c3c1f1f636da56a197ce0b5084d44b86f58f0fb32983278fa55c2544d221af4"
+        PACKAGE_SHA256="d0a7bdb2ca821c9bb5f4cc2fb11a4ed96025db63b20d1bddf1e632361a108220"
         ;;
     aarch64|arm64)
         TARGET="aarch64-unknown-linux-musl"
-        PACKAGE_SHA256="d91c6354ec1efc125068056c02bc8cffbc0a53fd4ecfebc3e5f1771765fc7fa3"
+        PACKAGE_SHA256="b1bc561a5bf74f9c5767c698275ae8043cee2ce45341098048b0b0b8b4e2cfc5"
         ;;
     *)
         echo "ERROR: Unsupported architecture: $(uname -m)"

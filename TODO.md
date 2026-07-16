@@ -70,4 +70,4 @@ Instead of `-v "${WORKSPACE_DIR}:/workspace:rw"`, the container writes to an int
 
 - **Timeout kill-after:** 30s is generous — the container gets a TERM signal and has 30s to exit before SIGKILL. Adjust if needed.
 - **`docker cp` on violent death:** If a container is OOM-killed or otherwise dies too hard, `docker cp` may fail. Acceptable trade-off — the work is re-runnable.
-- **Codex adapter** (`agents/codex/`) is out of scope for this iteration — handled separately.
+- **Codex adapter** (`agents/codex/`) is handled on the dedicated Codex runner branch.
