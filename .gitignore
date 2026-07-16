@@ -3,6 +3,7 @@ workspace/
 
 # Agent bundles (self-contained, built at runtime)
 agents/*/bundle/
+agents/codex/.cache/
 
 # Python venvs
 .venv/

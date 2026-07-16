@@ -4,7 +4,8 @@
 #
 # Architecture: Self-contained agent bundles mounted into swebench eval images.
 # Each instance has a pre-built swebench image; we mount the bundle read-only
-# at /agent. Outputs are written inside the container and copied out via docker cp.
+# at /agent. Each instance gets an isolated host output bind mount; clean-exit
+# artifacts are also validated/copied before the container is removed.
 #
 # Two phases:
 #   [WORK]  --run / --run-all    Run agents against instances (collect patches)
@@ -708,7 +709,7 @@ do_run() {
     append_agent_runtime_env "$agent" docker_command
     docker_command+=(
         -v "${bundle_dir}:/agent:ro"
-        -v "${agent_output_root}:/workspace/outputs"
+        -v "${instance_output_dir}:/workspace/outputs/${agent}/${instance_id}"
         "$image_name"
         /agent/entrypoint.sh
         "$instance_id"

@@ -32,7 +32,7 @@ docker() {
     fi
 }
 
-echo "1..9"
+echo "1..13"
 
 bash -n "${REPO_ROOT}/run.sh" \
     "${REPO_ROOT}/agents/pi/entrypoint.sh" \
@@ -126,6 +126,16 @@ assert_contains "$cleanup_calls" "rmi image_one"
 [[ "$cleanup_calls" != *"image_two"* ]] || fail "cleanup selected unrelated image"
 echo "ok 7 - cleanup targets only harness resources"
 
+mount_contract=$(grep -F -- \
+    '-v "${instance_output_dir}:/workspace/outputs/${agent}/${instance_id}"' \
+    "${REPO_ROOT}/run.sh" || true)
+[ -n "$mount_contract" ] || fail "run output mount is not scoped to one instance"
+legacy_mount=$(grep -F -- \
+    '-v "${agent_output_root}:/workspace/outputs"' \
+    "${REPO_ROOT}/run.sh" || true)
+[ -z "$legacy_mount" ] || fail "double-agent output mount regression is present"
+echo "ok 8 - output mount is scoped to the current instance"
+
 export SWE_CODEX_MODEL="test-model"
 export SWE_CODEX_BASE_URL="http://model.invalid/v1"
 export SWE_CODEX_API_KEY="test-token"
@@ -143,7 +153,7 @@ append_agent_runtime_env pi pi_runtime_args
 [ "${#pi_runtime_args[@]}" -eq 2 ] || fail "Codex runtime settings leaked into Pi"
 unset SWE_CODEX_MODEL SWE_CODEX_BASE_URL SWE_CODEX_API_KEY
 unset SWE_CODEX_CONTEXT_WINDOW SWE_CODEX_AUTO_COMPACT_TOKEN_LIMIT
-echo "ok 8 - Codex runtime settings are isolated and forwarded"
+echo "ok 9 - Codex runtime settings are isolated and forwarded"
 
 fake_bundle="${TEST_ROOT}/codex-bundle"
 fake_testbed="${TEST_ROOT}/testbed"
@@ -166,6 +176,7 @@ if [ "${1:-}" = "--version" ]; then
 fi
 [ "${1:-}" = "exec" ] || exit 2
 cp "${CODEX_HOME}/config.toml" "$FAKE_CAPTURE_CONFIG"
+printf '%s\n' "$CODEX_HOME" > "$FAKE_CAPTURE_CODEX_HOME"
 output_file=""
 while [ $# -gt 0 ]; do
     if [ "$1" = "--output-last-message" ]; then
@@ -178,14 +189,17 @@ done
 printf '%s\n' "fake final message" > "$output_file"
 printf '%s\n' changed > "${FAKE_TESTBED}/change.txt"
 printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":3}}'
+exit "${FAKE_CODEX_EXIT_CODE:-0}"
 SH
 chmod +x "${fake_bundle}/bin/codex"
 
 FAKE_CAPTURE_CONFIG="${TEST_ROOT}/rendered-config.toml" \
+FAKE_CAPTURE_CODEX_HOME="${TEST_ROOT}/captured-codex-home.txt" \
 FAKE_TESTBED="$fake_testbed" \
 SWE_AGENT_BUNDLE="$fake_bundle" \
 SWE_TESTBED_DIR="$fake_testbed" \
 SWE_OUTPUT_ROOT="$fake_outputs" \
+SWE_CODEX_RUNTIME_DIR="${TEST_ROOT}/codex-runtime" \
 SWE_AGENT_NAME="codex" \
 SWE_CODEX_MODEL="custom-model" \
 SWE_CODEX_BASE_URL="http://custom.invalid/v1" \
@@ -194,21 +208,25 @@ SWE_CODEX_AUTO_COMPACT_TOKEN_LIMIT="7000" \
     bash "${REPO_ROOT}/agents/codex/entrypoint.sh" \
         example__repo-3 example/repo "$base_commit" "Fix the example" >/dev/null
 
-python3 - "$fake_outputs" "${TEST_ROOT}/rendered-config.toml" <<'PY'
+python3 - "$fake_outputs" "${TEST_ROOT}/rendered-config.toml" \
+    "${TEST_ROOT}/captured-codex-home.txt" "${TEST_ROOT}/codex-runtime" <<'PY'
 import json
 import os
 import sys
 
-output_root, config_path = sys.argv[1:]
+output_root, config_path, captured_home_path, runtime_dir = sys.argv[1:]
 instance_dir = os.path.join(output_root, "example__repo-3")
 meta = json.load(open(os.path.join(instance_dir, "meta.json")))
 result = json.load(open(os.path.join(instance_dir, "result.json")))
 config = open(config_path).read()
 patch = open(os.path.join(instance_dir, "patch.diff")).read()
+captured_home = open(captured_home_path).read().strip()
 assert meta["model"] == "custom-model"
 assert meta["base_url"] == "http://custom.invalid/v1"
 assert result["status"] == "patch_collected"
+assert result["patch_capture_error"] is False
 assert result["usage"] == {"input_tokens": 10, "output_tokens": 3}
+assert captured_home == os.path.join(runtime_dir, "home", ".codex")
 assert 'model = "custom-model"' in config
 assert 'base_url = "http://custom.invalid/v1"' in config
 assert "model_context_window = 8192" in config
@@ -216,4 +234,130 @@ assert "model_auto_compact_token_limit = 7000" in config
 assert "__SWE_CODEX_" not in config
 assert "change.txt" in patch
 PY
-echo "ok 9 - Codex entrypoint renders config and records a patch"
+echo "ok 10 - Codex entrypoint renders config and records a patch"
+
+fake_error_testbed="${TEST_ROOT}/error-testbed"
+fake_error_outputs="${TEST_ROOT}/error-outputs"
+mkdir -p "$fake_error_testbed"
+git -C "$fake_error_testbed" init -q
+printf '%s\n' original > "${fake_error_testbed}/original.txt"
+git -C "$fake_error_testbed" add original.txt
+git -C "$fake_error_testbed" -c user.name=Test -c user.email=test@example.invalid \
+    commit -qm initial
+error_base_commit=$(git -C "$fake_error_testbed" rev-parse HEAD)
+
+FAKE_CAPTURE_CONFIG="${TEST_ROOT}/error-config.toml" \
+FAKE_CAPTURE_CODEX_HOME="${TEST_ROOT}/error-codex-home.txt" \
+FAKE_CODEX_EXIT_CODE=7 \
+FAKE_TESTBED="$fake_error_testbed" \
+SWE_AGENT_BUNDLE="$fake_bundle" \
+SWE_TESTBED_DIR="$fake_error_testbed" \
+SWE_OUTPUT_ROOT="$fake_error_outputs" \
+SWE_CODEX_RUNTIME_DIR="${TEST_ROOT}/error-codex-runtime" \
+SWE_AGENT_NAME="codex" \
+    bash "${REPO_ROOT}/agents/codex/entrypoint.sh" \
+        example__repo-4 example/repo "$error_base_commit" "Fix the example" >/dev/null
+
+python3 - "$fake_error_outputs" <<'PY'
+import json
+import os
+import sys
+
+instance_dir = os.path.join(sys.argv[1], "example__repo-4")
+result = json.load(open(os.path.join(instance_dir, "result.json")))
+patch = open(os.path.join(instance_dir, "patch.diff")).read()
+assert result["status"] == "agent_error"
+assert result["agent_exit_code"] == 7
+assert result["patch_bytes"] > 0
+assert "change.txt" in patch
+PY
+echo "ok 11 - a failed Codex run cannot report patch_collected"
+
+fake_diff_testbed="${TEST_ROOT}/diff-testbed"
+fake_diff_outputs="${TEST_ROOT}/diff-outputs"
+mkdir -p "$fake_diff_testbed"
+git -C "$fake_diff_testbed" init -q
+printf '%s\n' original > "${fake_diff_testbed}/original.txt"
+git -C "$fake_diff_testbed" add original.txt
+git -C "$fake_diff_testbed" -c user.name=Test -c user.email=test@example.invalid \
+    commit -qm initial
+diff_base_commit=$(git -C "$fake_diff_testbed" rev-parse HEAD)
+
+cat > "${fake_bundle}/bin/git" <<'SH'
+#!/bin/bash
+if [ "${FAKE_GIT_FAILURE:-}" = "add" ] && [ "${1:-}" = "add" ]; then
+    exit 2
+fi
+if [ "${FAKE_GIT_FAILURE:-}" = "diff" ] && [ "${1:-}" = "diff" ]; then
+    printf '%s\n' partial-invalid-patch
+    exit 2
+fi
+exec "$REAL_GIT_BIN" "$@"
+SH
+chmod +x "${fake_bundle}/bin/git"
+
+REAL_GIT_BIN="$(command -v git)" \
+FAKE_GIT_FAILURE=diff \
+FAKE_CAPTURE_CONFIG="${TEST_ROOT}/diff-config.toml" \
+FAKE_CAPTURE_CODEX_HOME="${TEST_ROOT}/diff-codex-home.txt" \
+FAKE_TESTBED="$fake_diff_testbed" \
+SWE_AGENT_BUNDLE="$fake_bundle" \
+SWE_TESTBED_DIR="$fake_diff_testbed" \
+SWE_OUTPUT_ROOT="$fake_diff_outputs" \
+SWE_CODEX_RUNTIME_DIR="${TEST_ROOT}/diff-codex-runtime" \
+SWE_AGENT_NAME="codex" \
+    bash "${REPO_ROOT}/agents/codex/entrypoint.sh" \
+        example__repo-5 example/repo "$diff_base_commit" "Fix the example" >/dev/null
+
+python3 - "$fake_diff_outputs" <<'PY'
+import json
+import os
+import sys
+
+instance_dir = os.path.join(sys.argv[1], "example__repo-5")
+result = json.load(open(os.path.join(instance_dir, "result.json")))
+patch_path = os.path.join(instance_dir, "patch.diff")
+assert result["status"] == "invalid_result"
+assert result["patch_capture_error"] is True
+assert result["patch_bytes"] == 0
+assert os.path.getsize(patch_path) == 0
+PY
+echo "ok 12 - failed patch extraction cannot preserve partial output"
+
+fake_add_testbed="${TEST_ROOT}/add-testbed"
+fake_add_outputs="${TEST_ROOT}/add-outputs"
+mkdir -p "$fake_add_testbed"
+git -C "$fake_add_testbed" init -q
+printf '%s\n' original > "${fake_add_testbed}/original.txt"
+git -C "$fake_add_testbed" add original.txt
+git -C "$fake_add_testbed" -c user.name=Test -c user.email=test@example.invalid \
+    commit -qm initial
+add_base_commit=$(git -C "$fake_add_testbed" rev-parse HEAD)
+
+REAL_GIT_BIN="$(command -v git)" \
+FAKE_GIT_FAILURE=add \
+FAKE_CAPTURE_CONFIG="${TEST_ROOT}/add-config.toml" \
+FAKE_CAPTURE_CODEX_HOME="${TEST_ROOT}/add-codex-home.txt" \
+FAKE_TESTBED="$fake_add_testbed" \
+SWE_AGENT_BUNDLE="$fake_bundle" \
+SWE_TESTBED_DIR="$fake_add_testbed" \
+SWE_OUTPUT_ROOT="$fake_add_outputs" \
+SWE_CODEX_RUNTIME_DIR="${TEST_ROOT}/add-codex-runtime" \
+SWE_AGENT_NAME="codex" \
+    bash "${REPO_ROOT}/agents/codex/entrypoint.sh" \
+        example__repo-6 example/repo "$add_base_commit" "Fix the example" >/dev/null
+
+python3 - "$fake_add_outputs" <<'PY'
+import json
+import os
+import sys
+
+instance_dir = os.path.join(sys.argv[1], "example__repo-6")
+result = json.load(open(os.path.join(instance_dir, "result.json")))
+patch_path = os.path.join(instance_dir, "patch.diff")
+assert result["status"] == "invalid_result"
+assert result["patch_capture_error"] is True
+assert result["patch_bytes"] == 0
+assert os.path.getsize(patch_path) == 0
+PY
+echo "ok 13 - failed staging cannot produce a partial patch"
