@@ -159,6 +159,17 @@ with open(path, "w") as handle:
 PY
 }
 
+# Remove a named container AND release its bridge-network endpoint.
+# `docker rm` cannot free a bridge endpoint whose container no longer exists
+# (common after an interrupted/^C run), which causes "endpoint already exists
+# in network bridge" (exit 125) on the next `docker run`. `network disconnect
+# -f` clears those orphaned bindings even when the container is already gone.
+release_container() {
+    local name="$1"
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    docker network disconnect -f bridge "$name" >/dev/null 2>&1 || true
+}
+
 do_cleanup() {
     ensure_docker || return 1
     echo "=== Cleaning up SWE-bench Docker resources ==="
@@ -169,6 +180,20 @@ do_cleanup() {
     if [ ${#containers[@]} -gt 0 ]; then
         docker rm -f "${containers[@]}" >/dev/null
         echo "Removed ${#containers[@]} SWE-bench container(s)."
+    fi
+
+    # Also release orphaned bridge-network endpoints left behind by containers
+    # that were removed without their network binding being cleaned up. These
+    # have no container object anymore, so `docker rm` cannot free them and
+    # they would block future `docker run` calls with exit 125.
+    local orphan_endpoints=()
+    mapfile -t orphan_endpoints < <(docker network inspect bridge \
+        -f '{{range .Containers}}{{.Name}}{{println}}{{end}}' 2>/dev/null | grep '^swe_')
+    if [ ${#orphan_endpoints[@]} -gt 0 ]; then
+        for ep in "${orphan_endpoints[@]}"; do
+            docker network disconnect -f bridge "$ep" >/dev/null 2>&1 || true
+        done
+        echo "Released ${#orphan_endpoints[@]} orphaned network endpoint(s)."
     fi
 
     mapfile -t images < <(
@@ -643,8 +668,10 @@ do_run() {
     echo "=============================================================================="
 
     local container_name="swe_${agent}_${instance_id}"
-    # Remove any stale container from a previous interrupted run (prevents exit 125).
-    docker rm -f "${container_name}" >/dev/null 2>&1 || true
+    # Remove any stale container/network endpoint from a previous interrupted
+    # run. release_container also drops orphaned bridge endpoints (whose
+    # container is already gone) that would otherwise cause exit 125.
+    release_container "${container_name}"
     local started_at docker_status elapsed
     local docker_command=(
         docker run
@@ -653,7 +680,7 @@ do_run() {
         -e "SWE_AGENT_NAME=${agent}"
         -e "SWE_OUTPUT_ROOT=/workspace/outputs/${agent}"
         -v "${bundle_dir}:/agent:ro"
-        -v "${agent_output_root}:/workspace/outputs/${agent}"
+        -v "${agent_output_root}:/workspace/outputs"
         "$image_name"
         /agent/entrypoint.sh
         "$instance_id"
@@ -815,12 +842,12 @@ for inst in data:
             wait_count=$((wait_count + 1))
             if [ $wait_count -gt 3600 ]; then
                 echo "  ERROR: Timeout waiting for container, killing all swe containers"
-                docker ps --format "{{.Names}}" | grep "swe_${agent}_" | xargs -I {} docker stop {} 2>/dev/null || true
+                docker ps --format "{{.Names}}" | grep "swe_${agent}_" | while read -r c; do release_container "$c"; done 2>/dev/null || true
                 break
             fi
         done
-        # Double check — kill any remaining containers from previous runs
-        docker ps --format "{{.Names}}" | grep "swe_${agent}_" | xargs -I {} docker stop {} 2>/dev/null || true
+        # Double check — release any remaining containers/endpoints from previous runs
+        docker ps --format "{{.Names}}" | grep "swe_${agent}_" | while read -r c; do release_container "$c"; done 2>/dev/null || true
         # Resume: skip instances that already have a result.json
         if [ "$resume" = 1 ] && [ -f "${agent_output_root}/${instance_id}/result.json" ]; then
             skipped=$((skipped + 1))
