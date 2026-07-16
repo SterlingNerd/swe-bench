@@ -139,10 +139,10 @@ violently for `docker cp` (for example, an OOM kill), the output may be lost.
 for the current CPU architecture and verifies its SHA-256 digest before
 extracting it. The bundle includes Codex, its sandbox helper, and ripgrep.
 
-The entrypoint creates an ephemeral `CODEX_HOME`, loads the Responses API
-provider, runs `codex exec --ephemeral --json`, and captures the final message
-plus the full JSONL trajectory. It never mounts or copies host ChatGPT/OpenAI
-credentials into the benchmark container.
+The entrypoint creates an ephemeral `CODEX_HOME`, renders the Responses API
+provider from `SWE_CODEX_*` settings, runs `codex exec --ephemeral --json`, and
+captures the final message plus the full JSONL trajectory. It never mounts or
+copies host ChatGPT/OpenAI credentials into the benchmark container.
 
 Codex's nested sandbox cannot create namespaces under the Docker policy, so the
 CLI runs with its internal approvals and sandbox bypassed. The disposable
@@ -169,6 +169,30 @@ prune or remove unrelated Docker resources.
 
 - **Endpoint:** `http://host.docker.internal:11434/v1` (from inside Docker)
 - **API Key:** `local-key` — bogus/fake key, safe to publish
+
+The Codex adapter accepts these optional host environment overrides and passes
+only explicitly set values into Codex containers:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SWE_CODEX_MODEL` | `qwen3.6-35b-a3b` | Responses API model id |
+| `SWE_CODEX_BASE_URL` | `http://host.docker.internal:11434/v1` | Provider base URL visible inside Docker |
+| `SWE_CODEX_API_KEY` | `local-key` | Provider bearer token |
+| `SWE_CODEX_CONTEXT_WINDOW` | `256000` | Model context window |
+| `SWE_CODEX_AUTO_COMPACT_TOKEN_LIMIT` | `230400` | Auto-compaction threshold |
+
+For example:
+
+```bash
+SWE_CODEX_MODEL=my-model \
+SWE_CODEX_BASE_URL=http://host.docker.internal:8080/v1 \
+./run.sh --run codex django__django-7530
+```
+
+Use only a fake or narrowly scoped proxy token for `SWE_CODEX_API_KEY`.
+Repository-controlled commands and tests run inside the same container and may
+be able to inspect its environment. Do not pass a personal Codex login or a
+broadly privileged API credential.
 
 Run the host-side regression checks with:
 

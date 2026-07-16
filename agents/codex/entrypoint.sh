@@ -2,7 +2,7 @@
 # Run Codex non-interactively inside a pre-built SWE-bench evaluation image.
 set -euo pipefail
 
-AGENT_BUNDLE="/agent"
+AGENT_BUNDLE="${SWE_AGENT_BUNDLE:-/agent}"
 if [ ! -d "$AGENT_BUNDLE" ]; then
     echo "ERROR: Agent bundle not found at ${AGENT_BUNDLE}"
     exit 1
@@ -16,7 +16,51 @@ export PATH="${AGENT_BUNDLE}/bin:${AGENT_BUNDLE}/codex-path:${PATH}"
 export SWE_CODEX_API_KEY="${SWE_CODEX_API_KEY:-local-key}"
 
 mkdir -p "$CODEX_HOME"
-cp "${AGENT_BUNDLE}/config.toml" "${CODEX_HOME}/config.toml"
+CODEX_MODEL="${SWE_CODEX_MODEL:-qwen3.6-35b-a3b}"
+CODEX_BASE_URL="${SWE_CODEX_BASE_URL:-http://host.docker.internal:11434/v1}"
+CODEX_CONTEXT_WINDOW="${SWE_CODEX_CONTEXT_WINDOW:-256000}"
+CODEX_AUTO_COMPACT_TOKEN_LIMIT="${SWE_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-230400}"
+
+if ! [[ "$CODEX_CONTEXT_WINDOW" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: SWE_CODEX_CONTEXT_WINDOW must be a positive integer" >&2
+    exit 2
+fi
+if ! [[ "$CODEX_AUTO_COMPACT_TOKEN_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: SWE_CODEX_AUTO_COMPACT_TOKEN_LIMIT must be a positive integer" >&2
+    exit 2
+fi
+if [ "$CODEX_AUTO_COMPACT_TOKEN_LIMIT" -gt "$CODEX_CONTEXT_WINDOW" ]; then
+    echo "ERROR: auto-compact limit cannot exceed the context window" >&2
+    exit 2
+fi
+
+CODEX_TEMPLATE="${AGENT_BUNDLE}/config.toml" \
+    CODEX_CONFIG="${CODEX_HOME}/config.toml" \
+    CODEX_MODEL_VALUE="$CODEX_MODEL" CODEX_BASE_URL_VALUE="$CODEX_BASE_URL" \
+    CODEX_CONTEXT_WINDOW_VALUE="$CODEX_CONTEXT_WINDOW" \
+    CODEX_AUTO_COMPACT_TOKEN_LIMIT_VALUE="$CODEX_AUTO_COMPACT_TOKEN_LIMIT" \
+    python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+template = Path(os.environ["CODEX_TEMPLATE"]).read_text()
+replacements = {
+    '"__SWE_CODEX_MODEL__"': json.dumps(os.environ["CODEX_MODEL_VALUE"]),
+    '"__SWE_CODEX_BASE_URL__"': json.dumps(os.environ["CODEX_BASE_URL_VALUE"]),
+    "__SWE_CODEX_CONTEXT_WINDOW__": os.environ["CODEX_CONTEXT_WINDOW_VALUE"],
+    "__SWE_CODEX_AUTO_COMPACT_TOKEN_LIMIT__": os.environ[
+        "CODEX_AUTO_COMPACT_TOKEN_LIMIT_VALUE"
+    ],
+}
+for placeholder, value in replacements.items():
+    if placeholder not in template:
+        raise SystemExit(f"missing Codex config placeholder: {placeholder}")
+    template = template.replace(placeholder, value)
+if "__SWE_CODEX_" in template:
+    raise SystemExit("unrendered Codex config placeholder")
+Path(os.environ["CODEX_CONFIG"]).write_text(template)
+PY
 
 if [ "${1:-}" = "--interactive" ]; then
     echo "Starting interactive shell with Codex $(codex --version)..."
@@ -29,7 +73,7 @@ BASE_COMMIT="${3:?Missing base_commit}"
 PROBLEM_STATEMENT="${4:?Missing problem_statement}"
 OUTPUT_ROOT="${SWE_OUTPUT_ROOT:-/workspace/outputs}"
 OUTPUT_DIR="${OUTPUT_ROOT}/${INSTANCE_ID}"
-REPO_DIR="/testbed"
+REPO_DIR="${SWE_TESTBED_DIR:-/testbed}"
 
 mkdir -p "${OUTPUT_DIR}/eval"
 META_FILE="${OUTPUT_DIR}/meta.json"
@@ -37,6 +81,7 @@ INSTANCE_ID_VALUE="$INSTANCE_ID" REPO_URL_VALUE="$REPO_URL" \
     BASE_COMMIT_VALUE="$BASE_COMMIT" META_FILE="$META_FILE" \
     AGENT_NAME_VALUE="${SWE_AGENT_NAME:-codex}" \
     CODEX_VERSION_VALUE="$(codex --version 2>/dev/null || echo unknown)" \
+    CODEX_MODEL_VALUE="$CODEX_MODEL" CODEX_BASE_URL_VALUE="$CODEX_BASE_URL" \
     python3 - <<'PY'
 import json
 import os
@@ -47,8 +92,9 @@ meta = {
     "base_commit": os.environ["BASE_COMMIT_VALUE"],
     "agent": os.environ["AGENT_NAME_VALUE"],
     "agent_version": os.environ["CODEX_VERSION_VALUE"],
-    "model": "qwen3.6-35b-a3b",
+    "model": os.environ["CODEX_MODEL_VALUE"],
     "provider": "local_swebench",
+    "base_url": os.environ["CODEX_BASE_URL_VALUE"],
 }
 with open(os.environ["META_FILE"], "w") as handle:
     json.dump(meta, handle, indent=2)
@@ -64,7 +110,8 @@ PROMPT=$(printf '%s\n\n%s' \
 echo "=============================================================================="
 echo "SWE-bench Agent: ${INSTANCE_ID}"
 echo "Codex: $(codex --version 2>/dev/null || echo 'not found')"
-echo "Model endpoint: http://host.docker.internal:11434/v1"
+echo "Model: ${CODEX_MODEL}"
+echo "Model endpoint: ${CODEX_BASE_URL}"
 echo "=============================================================================="
 
 START_TIME=$(date +%s)
@@ -136,8 +183,6 @@ except FileNotFoundError:
 with open(os.environ["RESULT_FILE"], "w") as handle:
     json.dump(result, handle, indent=2)
 PY
-
-chmod -R a+rwX "$OUTPUT_DIR" 2>/dev/null || true
 
 echo "  Result: ${STATUS}; patch ${PATCH_SIZE} bytes; ${ELAPSED}s"
 echo "  Output: ${OUTPUT_DIR}/"
