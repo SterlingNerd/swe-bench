@@ -8,14 +8,16 @@ if [ ! -d "$AGENT_BUNDLE" ]; then
     exit 1
 fi
 
-export HOME="/tmp"
-export CODEX_HOME="/tmp/codex-home"
+CODEX_RUNTIME_DIR="${SWE_CODEX_RUNTIME_DIR:-/workspace/codex-runtime}"
+export HOME="${CODEX_RUNTIME_DIR}/home"
+export CODEX_HOME="${HOME}/.codex"
 export PATH="${AGENT_BUNDLE}/bin:${AGENT_BUNDLE}/codex-path:${PATH}"
 # llama.cpp accepts any non-empty bearer token unless its server is configured
 # with a real API key. Never mount a host Codex login into benchmark containers.
 export SWE_CODEX_API_KEY="${SWE_CODEX_API_KEY:-local-key}"
 
 mkdir -p "$CODEX_HOME"
+chmod 700 "$CODEX_RUNTIME_DIR" "$HOME" "$CODEX_HOME"
 CODEX_MODEL="${SWE_CODEX_MODEL:-qwen3.6-35b-a3b}"
 CODEX_BASE_URL="${SWE_CODEX_BASE_URL:-http://host.docker.internal:11434/v1}"
 CODEX_CONTEXT_WINDOW="${SWE_CODEX_CONTEXT_WINDOW:-256000}"
@@ -138,24 +140,40 @@ fi
 [ -f "$AGENT_OUTPUT" ] || touch "$AGENT_OUTPUT"
 
 echo "  Extracting patch..."
-git add -A 2>/dev/null || true
-git diff --binary "$BASE_COMMIT" > "${OUTPUT_DIR}/patch.diff" 2>/dev/null || {
-    echo "  WARNING: git diff failed"
-    touch "${OUTPUT_DIR}/patch.diff"
-}
+PATCH_FILE="${OUTPUT_DIR}/patch.diff"
+PATCH_TMP=$(mktemp "${OUTPUT_DIR}/.patch.diff.XXXXXX")
+PATCH_CAPTURE_ERROR=0
+if ! git add -A 2>/dev/null; then
+    echo "  WARNING: git add failed"
+    PATCH_CAPTURE_ERROR=1
+fi
+if [ "$PATCH_CAPTURE_ERROR" -eq 0 ] && \
+        git diff --binary "$BASE_COMMIT" > "$PATCH_TMP" 2>/dev/null; then
+    mv "$PATCH_TMP" "$PATCH_FILE"
+else
+    if [ "$PATCH_CAPTURE_ERROR" -eq 0 ]; then
+        echo "  WARNING: git diff failed"
+    fi
+    rm -f "$PATCH_TMP"
+    : > "$PATCH_FILE"
+    PATCH_CAPTURE_ERROR=1
+fi
 
-PATCH_SIZE=$(wc -c < "${OUTPUT_DIR}/patch.diff" 2>/dev/null || echo 0)
+PATCH_SIZE=$(wc -c < "$PATCH_FILE" 2>/dev/null || echo 0)
 ELAPSED=$(( $(date +%s) - START_TIME ))
-if [ "$PATCH_SIZE" -gt 0 ]; then
-    STATUS="patch_collected"
+if [ "$PATCH_CAPTURE_ERROR" -ne 0 ]; then
+    STATUS="invalid_result"
 elif [ "$AGENT_EXIT_CODE" -ne 0 ]; then
     STATUS="agent_error"
+elif [ "$PATCH_SIZE" -gt 0 ]; then
+    STATUS="patch_collected"
 else
     STATUS="no_patch"
 fi
 
 RESULT_STATUS="$STATUS" PATCH_SIZE="$PATCH_SIZE" ELAPSED="$ELAPSED" \
     AGENT_EXIT_CODE="$AGENT_EXIT_CODE" RESULT_FILE="${OUTPUT_DIR}/result.json" \
+    PATCH_CAPTURE_ERROR="$PATCH_CAPTURE_ERROR" \
     TRAJECTORY_FILE="$TRAJECTORY_FILE" python3 - <<'PY'
 import json
 import os
@@ -165,6 +183,7 @@ result = {
     "patch_bytes": int(os.environ["PATCH_SIZE"]),
     "elapsed_seconds": int(os.environ["ELAPSED"]),
     "agent_exit_code": int(os.environ["AGENT_EXIT_CODE"]),
+    "patch_capture_error": bool(int(os.environ["PATCH_CAPTURE_ERROR"])),
 }
 
 # Preserve the last usage event when the provider supplies one.

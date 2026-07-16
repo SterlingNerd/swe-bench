@@ -31,7 +31,8 @@ per-instance SWE-bench image. The image's repository is already checked out at
 - A local OpenAI-compatible model server reachable from containers at
   `http://host.docker.internal:11434/v1`.
 - For Codex, the server must implement the streaming Responses API at
-  `POST /v1/responses`.
+  `POST /v1/responses`, including tool-call events. Its advertised model id
+  and usable context must match the configured values.
 - The default model id is `qwen3.6-35b-a3b`, with the intentionally fake bearer
   token `local-key`.
 
@@ -106,9 +107,9 @@ workspace/outputs/<agent>/<instance_id>/
 ```
 
 Possible pre-evaluation statuses include `patch_collected`, `no_patch`,
-`agent_error`, `container_error`, and `timed_out`. `--eval` adds `local_eval`
-and promotes the status to `resolved`, `failed`, or `error` while preserving
-the original agent metadata.
+`agent_error`, `invalid_result`, `container_error`, and `timed_out`. `--eval`
+adds `local_eval` and promotes the status to `resolved`, `failed`, or `error`
+while preserving the original agent metadata.
 
 Aggregate files such as `predictions.jsonl`, `summary.json`, and evaluator
 reports stay inside `workspace/outputs/<agent>/`. This prevents a Pi run from
@@ -125,19 +126,22 @@ swebench/sweb.eval.x86_64.django_1776_django-7530:latest
 `run.sh` spins up that image with:
 
 1. Agent bundle mounted read-only at `/agent`
-2. Outputs written to internal `/workspace/outputs/<agent>/<instance_id>/`
+2. Only the current instance's host output directory bind-mounted at
+   `/workspace/outputs/<agent>/<instance_id>/`
 3. Cached repos in `/tmp/repos` (tmpfs, ephemeral)
 4. Calls `/agent/entrypoint.sh` as the container command
 
-After the container exits, `run.sh` uses `docker cp` to copy outputs out to
-the host. This avoids uid/gid permission issues. If a container dies too
-violently for `docker cp` (for example, an OOM kill), the output may be lost.
+The per-instance bind mount preserves partial diagnostics during timeouts or
+container failures without exposing prior benchmark results to the task. After
+a clean exit, `run.sh` also validates/copies the artifacts and restores host
+ownership.
 
 ## Codex Adapter
 
-`agents/codex/build_bundle.sh` downloads the official pinned Codex CLI package
-for the current CPU architecture and verifies its SHA-256 digest before
-extracting it. The bundle includes Codex, its sandbox helper, and ripgrep.
+`agents/codex/build_bundle.sh` downloads the official pinned Codex CLI 0.144.5
+package for the current CPU architecture and verifies its release SHA-256
+digest before extracting it. The bundle includes Codex, its sandbox helper,
+and ripgrep.
 
 The entrypoint creates an ephemeral `CODEX_HOME`, renders the Responses API
 provider from `SWE_CODEX_*` settings, runs `codex exec --ephemeral --json`, and
@@ -146,9 +150,10 @@ copies host ChatGPT/OpenAI credentials into the benchmark container.
 
 Codex's nested sandbox cannot create namespaces under the Docker policy, so the
 CLI runs with its internal approvals and sandbox bypassed. The disposable
-Docker container is the security boundary, matching Pi's execution model.
-Avoid replacing the fake local token with host credentials or mounting private
-host paths into these containers.
+Docker container is the outer process/filesystem boundary, matching Pi's
+execution model, but task code can inspect its environment and reach the model
+endpoint. Avoid replacing the fake local token with broad host credentials or
+mounting private host paths into these containers.
 
 ## Security Hardening
 
