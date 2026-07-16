@@ -54,25 +54,29 @@ mkdir -p "$(dirname "$LOG_FILE")"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # ==============================================================================
-# EXIT HANDLER — clean ^C / ERR / EXIT
+# SIGNAL HANDLING — clean ^C / ERR / EXIT
 # ==============================================================================
-EXITING=0
-cleanup_on_exit() {
-    [ "$EXITING" -eq 1 ] && return
-    EXITING=1
+STOPPED=0
+stop_running_containers() {
+    [ "$STOPPED" -eq 1 ] && return
+    STOPPED=1
+    docker ps --format '{{.Names}}' 2>/dev/null | grep '^swe_' | while read -r cname; do
+        echo "  Stopping container: ${cname}"
+        docker stop "$cname" >/dev/null 2>&1 || true
+    done
+}
+on_interrupt() {
     echo ""
     echo "=============================================================================="
     echo "  ^C received — shutting down..."
     echo "=============================================================================="
-    # Kill any running swe containers
-    docker ps --format '{{.Names}}' | grep '^swe_' | while read -r cname; do
-        echo "  Stopping container: ${cname}"
-        docker stop "$cname" >/dev/null 2>&1 || true
-    done
+    stop_running_containers
     echo "  Cleanup complete. Goodbye."
     echo "=============================================================================="
+    exit 130
 }
-trap cleanup_on_exit INT TERM EXIT
+trap on_interrupt INT TERM
+trap stop_running_containers EXIT
 
 # ==============================================================================
 # SINGLE INSTANCE LOCK — ensure only one instance of this script runs at a time
@@ -559,8 +563,8 @@ instance_to_image() {
 # mounts our agent bundle read-only at /agent, and calls entrypoint.sh inside it.
 # ==============================================================================
 DOCKER_RUN_FLAGS=(
-    --memory 8g
-    --memory-swap 16g
+    --memory 32g
+    --memory-swap 64g
     --pids-limit 500
     --tmpfs /tmp:rw,noexec,nosuid,size=2g
     --cap-drop ALL
@@ -639,6 +643,8 @@ do_run() {
     echo "=============================================================================="
 
     local container_name="swe_${agent}_${instance_id}"
+    # Remove any stale container from a previous interrupted run (prevents exit 125).
+    docker rm -f "${container_name}" >/dev/null 2>&1 || true
     local started_at docker_status elapsed
     local docker_command=(
         docker run
@@ -647,6 +653,7 @@ do_run() {
         -e "SWE_AGENT_NAME=${agent}"
         -e "SWE_OUTPUT_ROOT=/workspace/outputs/${agent}"
         -v "${bundle_dir}:/agent:ro"
+        -v "${agent_output_root}:/workspace/outputs/${agent}"
         "$image_name"
         /agent/entrypoint.sh
         "$instance_id"
@@ -695,8 +702,14 @@ do_run() {
 
     mkdir -p "$instance_output_dir"
     local cp_ok=0
-    if docker cp "${container_name}:/workspace/outputs/${agent}/${instance_id}/" \
-                 "${instance_output_dir}/" 2>/dev/null; then
+    local cp_tmp
+    cp_tmp=$(mktemp -d)
+    if docker cp "${container_name}:/workspace/outputs/${agent}/${instance_id}" \
+                 "${cp_tmp}/"; then
+        # Flatten: docker cp nests the instance dir; move its contents into place.
+        if [ -d "${cp_tmp}/${instance_id}" ]; then
+            mv "${cp_tmp}/${instance_id}/"* "${instance_output_dir}/" 2>/dev/null || true
+        fi
         # Verify that the copy actually produced output files.
         if [ -f "${instance_output_dir}/result.json" ] || [ -f "${instance_output_dir}/patch.diff" ]; then
             echo "  Copied outputs from container."
@@ -705,18 +718,27 @@ do_run() {
             echo "  WARNING: Copy succeeded but no output files found in container."
         fi
     else
+        echo "  WARNING: Failed to copy outputs from container (state=$container_state)."
         case "$container_state" in
             dead|error)
-                echo "  WARNING: Container died violently (state=$container_state), output may be incomplete."
+                echo "  Container died violently — leaving it for inspection."
                 ;;
             *)
-                echo "  WARNING: Failed to copy outputs from container (state=$container_state)."
+                echo "  Leaving container for manual inspection: ${container_name}"
                 ;;
         esac
     fi
+    rm -rf "${cp_tmp}"
 
-    # Clean up the container
-    docker rm -f "$container_name" >/dev/null 2>&1 || true
+    # Only remove the container once we have the outputs.
+    if [ "$cp_ok" -eq 1 ]; then
+        docker rm -f "$container_name" >/dev/null 2>&1 || true
+    fi
+
+    # Fix ownership — files written by root in the container need to be owned by us.
+    if [ "$cp_ok" -eq 1 ]; then
+        chown -R "$(id -u):$(id -g)" "${instance_output_dir}" 2>/dev/null || true
+    fi
 
     # If we couldn't copy outputs, treat as failure.
     if [ "$cp_ok" -eq 0 ]; then
