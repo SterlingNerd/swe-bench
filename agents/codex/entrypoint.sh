@@ -121,7 +121,27 @@ TRAJECTORY_FILE="${OUTPUT_DIR}/trajectory.jsonl"
 AGENT_OUTPUT="${OUTPUT_DIR}/agent_output.txt"
 AGENT_STDERR="${OUTPUT_DIR}/agent_stderr.txt"
 
+TERMINATION_SIGNAL=""
+AGENT_PID=""
+KILL_TIMER_PID=""
+forward_agent_signal() {
+    local signal_name="$1"
+    TERMINATION_SIGNAL="$signal_name"
+    if [ -n "$AGENT_PID" ] && kill -0 "$AGENT_PID" 2>/dev/null; then
+        echo "  ${signal_name} received; requesting Codex checkpoint shutdown..." >&2
+        kill -TERM -- "-${AGENT_PID}" 2>/dev/null || kill -TERM "$AGENT_PID" 2>/dev/null || true
+        (
+            sleep 20
+            kill -KILL -- "-${AGENT_PID}" 2>/dev/null || true
+        ) &
+        KILL_TIMER_PID=$!
+    fi
+}
+trap 'forward_agent_signal TERM' TERM
+trap 'forward_agent_signal INT' INT
+
 set +e
+set -m
 codex exec \
     --strict-config \
     --cd "$REPO_DIR" \
@@ -130,8 +150,18 @@ codex exec \
     --json \
     --output-last-message "$AGENT_OUTPUT" \
     "$PROMPT" \
-    2> >(tee "$AGENT_STDERR" >&2) | tee "$TRAJECTORY_FILE"
-AGENT_EXIT_CODE=${PIPESTATUS[0]}
+    > >(tee "$TRAJECTORY_FILE") \
+    2> >(tee "$AGENT_STDERR" >&2) &
+AGENT_PID=$!
+set +m
+wait "$AGENT_PID"
+AGENT_EXIT_CODE=$?
+while kill -0 "$AGENT_PID" 2>/dev/null; do
+    wait "$AGENT_PID"
+    AGENT_EXIT_CODE=$?
+done
+[ -z "$KILL_TIMER_PID" ] || kill "$KILL_TIMER_PID" 2>/dev/null || true
+AGENT_PID=""
 set -e
 
 if [ "$AGENT_EXIT_CODE" -ne 0 ]; then
@@ -142,13 +172,20 @@ fi
 echo "  Extracting patch..."
 PATCH_FILE="${OUTPUT_DIR}/patch.diff"
 PATCH_TMP=$(mktemp "${OUTPUT_DIR}/.patch.diff.XXXXXX")
+INDEX_TMP=$(mktemp "${OUTPUT_DIR}/.checkpoint-index.XXXXXX")
+rm -f "$INDEX_TMP"
 PATCH_CAPTURE_ERROR=0
-if ! git add -A 2>/dev/null; then
+CHECKPOINT_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+if ! GIT_INDEX_FILE="$INDEX_TMP" git read-tree "$BASE_COMMIT" 2>/dev/null; then
+    echo "  WARNING: checkpoint index initialization failed"
+    PATCH_CAPTURE_ERROR=1
+elif ! GIT_INDEX_FILE="$INDEX_TMP" git add -A 2>/dev/null; then
     echo "  WARNING: git add failed"
     PATCH_CAPTURE_ERROR=1
 fi
 if [ "$PATCH_CAPTURE_ERROR" -eq 0 ] && \
-        git diff --binary "$BASE_COMMIT" > "$PATCH_TMP" 2>/dev/null; then
+        GIT_INDEX_FILE="$INDEX_TMP" git diff --cached --binary "$BASE_COMMIT" \
+            > "$PATCH_TMP" 2>/dev/null; then
     mv "$PATCH_TMP" "$PATCH_FILE"
 else
     if [ "$PATCH_CAPTURE_ERROR" -eq 0 ]; then
@@ -158,11 +195,39 @@ else
     : > "$PATCH_FILE"
     PATCH_CAPTURE_ERROR=1
 fi
+rm -f "$INDEX_TMP"
+CHECKPOINT_FINISHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 PATCH_SIZE=$(wc -c < "$PATCH_FILE" 2>/dev/null || echo 0)
 ELAPSED=$(( $(date +%s) - START_TIME ))
+TERMINATION_STATUS=""
+TERMINATION_REASON="agent_exit"
+TERMINATION_REQUESTED_AT=""
+if [ -n "$TERMINATION_SIGNAL" ]; then
+    read -r TERMINATION_STATUS TERMINATION_REASON TERMINATION_REQUESTED_AT < <(
+        REQUEST_FILE="${OUTPUT_DIR}/termination-request.json" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ["REQUEST_FILE"])
+request = {}
+try:
+    request = json.load(path.open())
+except (OSError, json.JSONDecodeError):
+    pass
+print(
+    request.get("requested_status", "operator_cancelled"),
+    request.get("reason", "signal"),
+    request.get("requested_at", "unknown"),
+)
+PY
+    )
+fi
 if [ "$PATCH_CAPTURE_ERROR" -ne 0 ]; then
     STATUS="invalid_result"
+elif [ -n "$TERMINATION_STATUS" ]; then
+    STATUS="$TERMINATION_STATUS"
 elif [ "$AGENT_EXIT_CODE" -ne 0 ]; then
     STATUS="agent_error"
 elif [ "$PATCH_SIZE" -gt 0 ]; then
@@ -174,16 +239,30 @@ fi
 RESULT_STATUS="$STATUS" PATCH_SIZE="$PATCH_SIZE" ELAPSED="$ELAPSED" \
     AGENT_EXIT_CODE="$AGENT_EXIT_CODE" RESULT_FILE="${OUTPUT_DIR}/result.json" \
     PATCH_CAPTURE_ERROR="$PATCH_CAPTURE_ERROR" \
-    TRAJECTORY_FILE="$TRAJECTORY_FILE" python3 - <<'PY'
+    TRAJECTORY_FILE="$TRAJECTORY_FILE" TERMINATION_SIGNAL="$TERMINATION_SIGNAL" \
+    TERMINATION_REASON="$TERMINATION_REASON" \
+    TERMINATION_REQUESTED_AT="$TERMINATION_REQUESTED_AT" \
+    CHECKPOINT_STARTED_AT="$CHECKPOINT_STARTED_AT" \
+    CHECKPOINT_FINISHED_AT="$CHECKPOINT_FINISHED_AT" python3 - <<'PY'
 import json
 import os
+import tempfile
+from pathlib import Path
 
 result = {
+    "schema_version": 1,
     "status": os.environ["RESULT_STATUS"],
     "patch_bytes": int(os.environ["PATCH_SIZE"]),
     "elapsed_seconds": int(os.environ["ELAPSED"]),
     "agent_exit_code": int(os.environ["AGENT_EXIT_CODE"]),
     "patch_capture_error": bool(int(os.environ["PATCH_CAPTURE_ERROR"])),
+    "checkpointed": not bool(int(os.environ["PATCH_CAPTURE_ERROR"])),
+    "partial_patch": bool(os.environ["TERMINATION_SIGNAL"]),
+    "finalization_reason": os.environ["TERMINATION_REASON"],
+    "termination_signal": os.environ["TERMINATION_SIGNAL"] or None,
+    "termination_requested_at": os.environ["TERMINATION_REQUESTED_AT"] or None,
+    "checkpoint_started_at": os.environ["CHECKPOINT_STARTED_AT"],
+    "checkpoint_finished_at": os.environ["CHECKPOINT_FINISHED_AT"],
 }
 
 # Preserve the last usage event when the provider supplies one.
@@ -199,8 +278,17 @@ try:
 except FileNotFoundError:
     pass
 
-with open(os.environ["RESULT_FILE"], "w") as handle:
-    json.dump(result, handle, indent=2)
+target = Path(os.environ["RESULT_FILE"])
+fd, name = tempfile.mkstemp(prefix=".result.", dir=target.parent)
+try:
+    with os.fdopen(fd, "w") as handle:
+        json.dump(result, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(name, target)
+finally:
+    Path(name).unlink(missing_ok=True)
 PY
 
 echo "  Result: ${STATUS}; patch ${PATCH_SIZE} bytes; ${ELAPSED}s"

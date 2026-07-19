@@ -1,8 +1,9 @@
 # SWE-bench Harness Revamp Plan
 
-- **Status:** Planning only; none of the changes below are implemented yet.
+- **Status:** P0 safety and correctness implemented; P1-P4 remain planned.
 - **Target:** `agent/codex-swebench-runner`
 - **Last researched:** 2026-07-18
+- **Last implemented:** 2026-07-19
 
 ## Executive recommendation
 
@@ -22,6 +23,92 @@ The redesigned harness should:
    failures.
 6. Make queue continuation, infrastructure retry, agent retry, and Codex
    session continuation distinct operations.
+
+## Phase 1 implementation log — P0 safety and correctness
+
+Implemented on `agent/codex-swebench-runner` on 2026-07-19. This phase keeps
+`run.sh` as the compatibility wrapper and introduces a JSON-manifest artifact
+layer. The SQLite supervisor, leases, richer failure classifier, paid-provider
+proxy, loop detector, and bounded concurrency remain deferred to P1-P4.
+
+### Delivered
+
+- Added `scripts/run_artifacts.py` as the sole authority for run, task,
+  attempt, selection, evaluation, summary, and partial-cleanup paths.
+- Replaced reusable `outputs/<agent>/<instance>/` directories with unique
+  `runs/<run_id>/tasks/<instance>/attempts/attempt-NNNN/` directories.
+- Made finalized patches and result records tamper-evident by recording byte
+  length and SHA-256. Evaluation fails closed if either selected artifact
+  changes afterward.
+- Made the first finalized, non-empty `patch_collected` attempt the recorded
+  selection. Later eligible attempts do not silently replace it.
+- Changed evaluation to snapshot manifest selections into
+  `selected-attempts.json`, verify digests, and record outcomes in an immutable
+  report overlay rather than editing attempt `result.json` files.
+- Changed `--resume` into queue continuation for the named/latest manifest. It
+  runs only tasks with no extant attempt and does not retry agent failures.
+- Replaced broad partial-output discovery with manifest-listed cleanup.
+  `--cleanup-partial` requires an agent, defaults to dry-run, and needs
+  `--apply` before deleting exact unfinalized attempt paths.
+- Changed work containers to detached lifecycle control. Timeout/cancel writes
+  a termination request before TERM, captures Docker `State` before removal,
+  distinguishes monitor exit from container exit, and retains stopped
+  containers when attempt artifacts are incomplete.
+- Added TERM/INT forwarding and idempotent checkpoint finalization to both
+  Codex and Pi entrypoints. Patch capture uses a temporary Git index, atomic
+  rename, and does not alter the task repository's live index.
+- Kept legacy `workspace/outputs/` data read-only: it is not automatically
+  migrated, selected, evaluated, summarized, or cleaned.
+
+### Implemented artifact boundary
+
+```text
+runs/<run_id>/
+├── manifest.json
+├── tasks/<instance_id>/attempts/<attempt_id>/
+│   ├── attempt.json
+│   ├── result.json
+│   ├── patch.diff
+│   ├── container-state.json
+│   └── termination-request.json   # timeout/cancel only
+└── reports/
+    ├── summary.json
+    └── evaluations/<evaluation_id>/
+        ├── predictions.jsonl
+        ├── selected-attempts.json
+        └── evaluation.json
+```
+
+### Phase 1 verification
+
+The regression suites cover:
+
+- one-way attempt allocation and stable selection;
+- patch-digest tamper rejection;
+- evaluation overlays without attempt mutation;
+- cleanup dry-run, exact apply scope, and preservation of finalized/outside
+  paths;
+- detached Docker ordering (`checkpoint request -> stop -> inspect -> remove`);
+- stopped-container retention for incomplete artifacts;
+- manifest-derived evaluation, summaries, and status;
+- Codex and Pi TERM checkpoints with preserved partial patches; and
+- temporary-index patch capture without live-index mutation.
+
+Run them with:
+
+```bash
+python3 -B -m unittest -v tests/test_run_artifacts.py
+bash tests/test_harness.sh
+```
+
+### Deferred from the larger plan
+
+- SQLite state machine, crash-recovery leases, and status-selective retries;
+- structured heartbeats and no-progress/tool/model-stream budgets;
+- full failure taxonomy and automated provider/infrastructure classification;
+- run-scoped paid-provider proxy and network isolation;
+- shadow loop analysis and guarded recovery profiles; and
+- bounded parallel workers and global spend/resource circuit breakers.
 
 ## Motivation and benchmark limitations
 

@@ -13,10 +13,11 @@ swe-bench/
 ├── agents/
 │   ├── pi/                        # Pi CLI, local-provider config, entrypoint
 │   └── codex/                     # Codex CLI, local-provider config, entrypoint
-├── tests/test_harness.sh          # Host-side harness contract tests
-└── workspace/outputs/
-    ├── pi/<instance_id>/          # Pi artifacts
-    └── codex/<instance_id>/       # Codex artifacts
+├── scripts/run_artifacts.py       # Run manifest and attempt contract
+├── tests/                         # Artifact and lifecycle regression tests
+└── workspace/runs/
+    ├── latest/<agent>             # Plain-text latest-run pointer
+    └── <run_id>/                  # One immutable experiment namespace
 ```
 
 Each agent is built as a relocatable bundle under `agents/<agent>/bundle/`.
@@ -72,21 +73,22 @@ Run either agent on the same instance:
 ./run.sh --run codex django__django-7530
 ```
 
-Run the full dataset with an enforced per-instance timeout. `--resume` skips
-only existing results for the selected agent:
+Run the full dataset with an explicit run ID and checkpoint timeout. `--resume`
+continues only untouched tasks from that same manifest; it never silently
+retries an existing agent attempt:
 
 ```bash
-./run.sh --run-all codex --timeout 3600 --resume
+./run.sh --run-all codex --run-id verified-codex-baseline --timeout 3600
+./run.sh --run-all codex --run-id verified-codex-baseline --resume
 ```
 
 Install and invoke the official evaluator, then compare summaries:
 
 ```bash
 ./run.sh --init
-./run.sh --eval pi
-./run.sh --eval codex
-./run.sh --summarize
-./run.sh --status
+./run.sh --eval codex --run-id verified-codex-baseline
+./run.sh --summarize codex --run-id verified-codex-baseline
+./run.sh --status codex --run-id verified-codex-baseline
 ```
 
 Use `./run.sh --help` for the complete command and environment-variable list.
@@ -94,26 +96,41 @@ Use `./run.sh --help` for the complete command and environment-variable list.
 ## Output Contract
 
 ```text
-workspace/outputs/<agent>/<instance_id>/
-├── meta.json                 # Instance, agent, repository, and base commit
-├── problem_statement.txt     # Original SWE-bench issue
-├── agent_output.txt          # Agent's final/plain output
-├── agent_stderr.txt          # Codex diagnostics (Codex only)
-├── trajectory.jsonl          # Codex JSONL event stream (Codex only)
-├── pi-sessions/              # Pi session state (Pi only)
-├── patch.diff                # Binary-safe staged diff, including new files
-├── result.json               # Run status, timings, exit codes, evaluation
-└── eval/                     # Per-instance evaluation artifacts
+workspace/runs/<run_id>/
+├── manifest.json
+├── tasks/<instance_id>/attempts/<attempt_id>/
+│   ├── attempt.json
+│   ├── meta.json
+│   ├── problem_statement.txt
+│   ├── agent_output.txt
+│   ├── agent_stderr.txt      # Codex only
+│   ├── trajectory.jsonl      # Codex only
+│   ├── pi-sessions/          # Pi only
+│   ├── patch.diff
+│   ├── result.json
+│   ├── container-state.json
+│   └── termination-request.json  # Timeout/cancel only
+└── reports/
+    ├── summary.json
+    └── evaluations/<evaluation_id>/
+        ├── predictions.jsonl
+        ├── selected-attempts.json
+        ├── evaluation.json
+        └── harness/
 ```
 
-Possible pre-evaluation statuses include `patch_collected`, `no_patch`,
-`agent_error`, `invalid_result`, `container_error`, and `timed_out`. `--eval`
-adds `local_eval` and promotes the status to `resolved`, `failed`, or `error`
-while preserving the original agent metadata.
+Every invocation allocates a new `attempt-NNNN` directory. Finalization records
+the patch and result sizes and SHA-256 digests in the manifest. The first
+finalized, non-empty `patch_collected` attempt is selected automatically; later
+attempts require explicit selection and cannot silently replace it.
 
-Aggregate files such as `predictions.jsonl`, `summary.json`, and evaluator
-reports stay inside `workspace/outputs/<agent>/`. This prevents a Pi run from
-being mistaken for, overwritten by, or evaluated as a Codex run.
+Possible pre-evaluation statuses include `patch_collected`, `no_patch`,
+`agent_error`, `invalid_result`, `container_error`, `oom_killed`, `timed_out`,
+and `operator_cancelled`. Evaluation outcomes are stored in a report overlay;
+`--eval` never mutates a finalized attempt's `result.json`.
+
+Legacy `workspace/outputs/` trees are not auto-migrated, selected, evaluated,
+summarized, or cleaned by the manifest-backed commands.
 
 ## Container Runtime
 
@@ -126,15 +143,17 @@ swebench/sweb.eval.x86_64.django_1776_django-7530:latest
 `run.sh` spins up that image with:
 
 1. Agent bundle mounted read-only at `/agent`
-2. Only the current instance's host output directory bind-mounted at
+2. Only the current attempt directory bind-mounted at
    `/workspace/outputs/<agent>/<instance_id>/`
 3. Cached repos in `/tmp/repos` (tmpfs, ephemeral)
 4. Calls `/agent/entrypoint.sh` as the container command
 
-The per-instance bind mount preserves partial diagnostics during timeouts or
-container failures without exposing prior benchmark results to the task. After
-a clean exit, `run.sh` also validates/copies the artifacts and restores host
-ownership.
+The attempt-scoped bind mount preserves diagnostics without exposing prior
+attempts to the task. Containers run detached. On timeout or operator cancel,
+the host writes `termination-request.json`, sends TERM, lets the entrypoint
+capture an atomic binary diff with a temporary Git index, records Docker
+`State`, and removes the container only after artifacts validate. Incomplete
+artifacts retain the stopped container for diagnosis.
 
 ## Codex Adapter
 
@@ -167,6 +186,17 @@ enabled. The agent bundle is read-only, while `/testbed`, `/workspace`, and the
 `./run.sh --cleanup` is deliberately narrow: it removes only containers named
 `swe_*` and images whose repository begins with `swebench/sweb.`. It does not
 prune or remove unrelated Docker resources.
+
+Partial artifact cleanup is manifest-bounded and dry-run by default:
+
+```bash
+./run.sh --cleanup-partial --agent codex --run-id verified-codex-baseline
+./run.sh --cleanup-partial --agent codex --run-id verified-codex-baseline --apply
+```
+
+Only exact, manifest-listed, unfinalized attempt directories can be removed.
+Finalized attempts, selected attempts, run roots, and legacy outputs are never
+candidates.
 
 ## Configuration
 
@@ -202,6 +232,7 @@ broadly privileged API credential.
 Run the host-side regression checks with:
 
 ```bash
+python3 -B -m unittest -v tests/test_run_artifacts.py
 bash tests/test_harness.sh
 ```
 
