@@ -11,9 +11,10 @@ This is the durable execution checklist for the current branch. The complete
 rationale, operational evidence, acceptance details, and research references
 are in `BENCHMARK_REVAMP_PLAN.md`. The earlier implementation round was
 mistakenly called “Phase 1,” but its delivered scope was roadmap P0. P1 is not
-complete: queue continuation exists, while the SQLite supervisor, scoped
-leases, status-selective retry, structured heartbeats, budgets, and circuit
-breakers do not.
+complete. The isolated P1A SQLite foundation and local-volume P1D-0
+qualification now exist, but `run.sh` activation, the real NAS gate, scoped
+leases, status-selective retry, structured heartbeats, and runtime enforcement
+remain open.
 
 ### P0 — Safety and artifact correctness ✅
 
@@ -46,13 +47,15 @@ Current code facts this phase must remove:
 
 #### P1A — SQLite supervisor and state reconciliation
 
-- [ ] Add a migrated `state.sqlite` as the transactional scheduling authority;
-  retain manifests as durable audit exports.
-- [ ] Implement `planned -> preparing -> running -> checkpointing -> collected
+- [x] Add the migrated `state.sqlite` supervisor foundation with durable
+  manifest/event audit exports.
+- [ ] Activate it as the sole transactional scheduling authority in `run.sh`;
+  this is intentionally coupled to the P1B claim/preparation integration.
+- [x] Implement `planned -> preparing -> running -> checkpointing -> collected
   -> terminal/retryable`.
-- [ ] Reconcile existing manifest-backed runs without changing finalized
+- [x] Reconcile existing manifest-backed runs without changing finalized
   attempts.
-- [ ] Keep the default worker count at one.
+- [x] Keep the default worker count at one.
 
 #### P1B — Leases, recovery, and retry semantics
 
@@ -156,6 +159,13 @@ Subphases:
     explicit vendor support and permissions, atomic-operation, concurrency,
     restart, and large-upload qualification. This never permits NFS as
     Docker's `data-root`.
+  - [x] Local-volume gate: Distribution 3.1.1 readiness, tiny selected-amd64
+    push/pull/restart persistence, Skopeo full-index copy with matching digest,
+    and the single-platform Matplotlib 25311 digest-preserving push all passed
+    on 2026-07-19.
+  - [ ] Deployment gate: repeat against the intended NAS backend and verify
+    TLS hostname/CA, push authorization, reverse-proxy behavior, upload limits,
+    concurrent writers, restart persistence, registry logs, and capacity.
 - [ ] Keep the runner behind a registry capability/configuration interface so
   Distribution can be replaced by Harbor or another OCI registry without
   changing scheduler logic.

@@ -14,11 +14,18 @@ swe-bench/
 │   ├── pi/                        # Pi CLI, local-provider config, entrypoint
 │   └── codex/                     # Codex CLI, local-provider config, entrypoint
 ├── scripts/run_artifacts.py       # Run manifest and attempt contract
+├── scripts/run_state.py           # P1A transactional supervisor foundation
 ├── tests/                         # Artifact and lifecycle regression tests
 └── workspace/runs/
     ├── latest/<agent>             # Plain-text latest-run pointer
     └── <run_id>/                  # One immutable experiment namespace
 ```
+
+The P1A SQLite supervisor foundation is present and smoke-tested, but the live
+`run.sh` path still uses the P0 manifest scheduler until P1B integrates claims,
+preparation, leases, and recovery as one atomic cutover. The local-volume
+P1D-0 registry qualification passed; the intended NAS endpoint still needs its
+TLS/auth/proxy/storage qualification before it can become a runner dependency.
 
 Each agent is built as a relocatable bundle under `agents/<agent>/bundle/`.
 `run.sh` mounts the selected bundle read-only at `/agent` in the official
@@ -253,6 +260,7 @@ broadly privileged API credential.
 Run the host-side regression checks with:
 
 ```bash
+python3 -B -m unittest -v tests/test_run_state.py
 python3 -B -m unittest -v tests/test_run_artifacts.py
 bash tests/test_harness.sh
 ```
