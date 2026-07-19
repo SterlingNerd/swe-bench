@@ -120,6 +120,25 @@ LLM shell task and never direct manipulation of Docker/containerd files.
 
 Subphases:
 
+- [ ] **P1D-0:** qualify the registry outside the runner before it becomes a
+  scheduling dependency:
+  - use current `registry:3` for a new Distribution deployment instead of
+    starting new infrastructure on `registry:2`;
+  - start with a fresh local named volume and a writable endpoint with neither
+    `proxy:` nor maintenance read-only mode;
+  - require `/v2/` to return `200` or an intentional authenticated `401` with
+    the Registry API header;
+  - prove tiny-image tag/push/digest/pull and restart persistence;
+  - prove Skopeo registry-to-registry copy with preserved digests;
+  - repeat with the full Matplotlib 25311 canary;
+  - verify TLS hostname/CA, push authorization, reverse-proxy headers and upload
+    limits, capacity, and registry logs; and
+  - repeat on the intended NAS backend. Treat local-pass/NAS-fail as a storage
+    backend or mount failure, and qualify network-filesystem permissions and
+    large uploads or use a supported S3-compatible backend.
+- [ ] Keep the runner behind a registry capability/configuration interface so
+  Distribution can be replaced by Harbor or another OCI registry without
+  changing scheduler logic.
 - [ ] **P1D-1:** add the configurable digest-pinned NAS registry, credentials,
   reference resolution, digest-pinned pull, and structured inventory.
 - [ ] **P1D-2:** add single-flight seeding on a NAS miss with a seeding lease,

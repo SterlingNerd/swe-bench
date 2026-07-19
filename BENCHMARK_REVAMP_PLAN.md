@@ -608,8 +608,32 @@ regressions as the floor for all later phases.
    - reserve a separate, small quarantine budget for incomplete stopped
      containers.
 
-Implement P1D in three reviewable subphases:
+Implement P1D in four reviewable subphases:
 
+- **P1D-0 — Registry qualification gate:** qualify the registry independently
+  of the runner before making it a scheduling dependency. For a new
+  Distribution deployment, use the current `registry:3` release rather than
+  starting new infrastructure on `registry:2`. Start with a fresh local named
+  volume and a normal writable endpoint: no `proxy:` block and no maintenance
+  read-only mode. Require all of the following:
+  1. `/v2/` returns `200` or an intentional `401` challenge with the
+     `Docker-Distribution-API-Version: registry/2.0` header;
+  2. a tiny scratch image survives tag, push, digest verification, pull, and
+     registry restart;
+  3. Skopeo can copy registry-to-registry with preserved digests;
+  4. the Matplotlib 25311 canary completes the same round trip without proxy,
+     upload-size, timeout, capacity, or storage errors;
+  5. TLS hostname/CA validation, authentication push scope, reverse-proxy
+     `Host`/`X-Forwarded-*` handling, and registry logs are verified; and
+  6. the tests pass again after moving from the local volume to the intended
+     NAS backend.
+
+  If the local-volume tests pass and the NAS-backed tests fail, classify the
+  storage backend or mount as the fault rather than changing runner logic.
+  Explicitly qualify network-filesystem permissions and large-upload behavior,
+  or use a supported S3-compatible storage backend. Keep the runner bound to a
+  registry capability/configuration interface, not to Distribution itself, so
+  Harbor or another OCI registry can replace it without changing scheduling.
 - **P1D-1 — Configurable digest-pinned NAS registry:** configuration,
   credential handling, official-reference resolution, digest-pinned pull, and
   structured inventory.
@@ -809,5 +833,7 @@ full-reporting gates pass.
 - [Docker exact image removal](https://docs.docker.com/reference/cli/docker/image/rm/)
 - [Docker Hub pull usage and limits](https://docs.docker.com/docker-hub/usage/pulls/)
 - [Distribution registry configuration and proxy limitations](https://distribution.github.io/distribution/about/configuration/)
+- [Distribution registry deployment and writable push examples](https://distribution.github.io/distribution/about/deploying/)
+- [Distribution registry releases](https://github.com/distribution/distribution/releases)
 - [Distribution pull-through cache recipe](https://distribution.github.io/distribution/recipes/mirror/)
 - [Skopeo registry-to-registry image copy](https://github.com/containers/skopeo)
