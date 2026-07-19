@@ -128,6 +128,31 @@ P1 must not be marked complete until every P1F gate below passes. This
 correction preserves the implemented work while removing the naming ambiguity
 between the first implementation round and the roadmap phase numbers.
 
+### Audited P1 implementation gaps
+
+The 2026-07-19 branch audit found these concrete behaviors that P1 must replace:
+
+- `run.sh` holds one global `/tmp/swe-bench-run.lock` `flock` for the whole
+  process.
+- `SWEBENCH_REGISTRY` is hard-coded to `swebench` instead of accepting an
+  authenticated NAS-registry endpoint and source mapping.
+- `MAX_STORAGE_PCT` checks only `df` for the repository filesystem. It does not
+  account for the active Docker context, containerd snapshots/content, image
+  expansion, evaluation scratch space, or a reservation for the next cohort.
+- `SWEBENCH_IMAGE_CACHE` saves and loads one tar per image. The CLI help claims
+  this “keeps images off local disk,” but `docker load` necessarily restores an
+  unpacked local image, so the claim is false.
+- `begin-attempt` runs before dataset/image resolution, storage preflight, and
+  image load/pull. A preparation failure can strand a `started` attempt that
+  queue continuation will not revisit.
+- Evaluation uses `--cache_level instance` and does not pass `--clean True`,
+  maximizing instance-image retention.
+- The manifest does not yet record the exact image reference, registry source,
+  platform, or immutable image digest.
+
+These are implementation facts, not assumptions. P1A-P1E must remove them,
+and P1F must test their replacements.
+
 ## Operational evidence incorporated on 2026-07-19
 
 The revised phases below incorporate the two most recent operator reports and
@@ -161,8 +186,13 @@ The exact investigated image was
 `swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-25311:latest`, with
 observed digest
 `sha256:767d72ed9ee6c6c85fc54ba39457207c64da5ba6fc56d74580ed419fab0e1d2a`.
-It is the required real-image canary in P1F; the plan must not assume all
-Matplotlib or Django images have the same storage profile.
+The audit measured about 3.31 GB of registry content, 11.41 GB of local Docker
+disk usage, and roughly 7 GB of visible image filesystem content; the targeted
+`lib/matplotlib/tests/test_pickle.py::test_complete` evaluation passed. Adjacent
+Matplotlib images had materially different unique compressed sizes, and Django
+images were much smaller. This is the required real-image canary in P1F; the
+plan must not assume images in the same repository family have the same storage
+profile.
 
 ## Motivation and benchmark limitations
 
@@ -191,44 +221,37 @@ a legacy regression benchmark. They remain useful for comparing our own
 runner, model, and scaffold configurations when experimental controls are held
 constant.
 
-## Current-harness risks to address first
+## P0 risk disposition and remaining risks
 
-### Destructive cleanup scope
+### Addressed in P0: destructive cleanup scope
 
-`do_cleanup_partial` in [`run.sh`](run.sh) still assumes the old flat output
-layout. Under the current `outputs/<agent>/<instance_id>/` layout, it can see an
-agent root as incomplete and remove the entire agent output tree.
+The old flat-output cleanup hazard is closed. `--cleanup-partial` now requires
+an agent, resolves an exact run, obtains deletion candidates from its manifest,
+defaults to dry-run, and requires `--apply`. Regression tests prove that
+finalized, selected, legacy, and outside paths are preserved.
 
-Do not use `--cleanup-partial` until this is corrected and covered by tests.
-The replacement should be dry-run by default and resolve exact attempt paths
-from a run manifest rather than discovering deletion targets with broad globs.
+### Addressed in P0: timeout artifact loss
 
-### Timeout artifact loss
+The work container now runs detached. Timeout and operator-cancel paths write a
+termination request, signal the agent entrypoint, checkpoint the working tree,
+capture Docker state, and finalize metadata before removal. An incomplete
+checkpoint retains the stopped container instead of discarding recoverable
+work.
 
-The host wraps attached `docker run` with GNU `timeout`. On timeout it removes
-the container immediately. The Codex entrypoint extracts `patch.diff` only
-after `codex exec` returns, so a killed run loses the in-progress working-tree
-patch even though some JSONL and stderr output may already have reached the
-bind mount.
+### Partially addressed in P0: continuation and retry
 
-Timeout and operator-cancel paths must checkpoint the working tree, finalize
-structured metadata, inspect the container, and only then remove it.
+`--resume` is now manifest-backed queue continuation: it runs only untouched
+tasks and never retries an existing model attempt. It deliberately does not
+yet perform status-selective infrastructure retry or Codex session
+continuation; those distinct operations remain in P1B.
 
-### Resume is only skip
+### Addressed in P0: stale attempt contamination
 
-The current `--resume` option skips any instance that already has
-`result.json`, including `timed_out`, `agent_error`, `invalid_result`, and
-`no_patch`. It does not resume a durable queue or a Codex session, and it cannot
-select retryable statuses.
+Attempts now have immutable, uniquely allocated directories. Evaluation uses
+the first explicitly selected eligible attempt, verifies patch/result digests,
+and writes a separate immutable evaluation overlay.
 
-### Stale attempt contamination
-
-Reruns reuse the same instance directory. Old patches and result fields can
-survive a failed rerun, and evaluation currently selects any non-empty patch.
-Attempts must be immutable, and evaluation must consume only an explicitly
-selected attempt recorded in the run manifest.
-
-### Insufficient failure attribution
+### Remaining for P1/P3: insufficient failure attribution
 
 The current result schema cannot reliably distinguish:
 
@@ -242,7 +265,7 @@ The current result schema cannot reliably distinguish:
 - patch-extraction failure; and
 - official evaluator failure.
 
-### Credential exposure
+### Remaining for P2: credential exposure
 
 The adapter defaults to a local Responses-compatible endpoint and a fake key.
 Pointing it directly at a paid endpoint would place the credential inside a
@@ -577,7 +600,8 @@ regressions as the floor for all later phases.
 7. Keep registry credentials on the host; never expose them to task
    containers.
 8. Start with this policy for a 250 GB local drive:
-   - do not schedule below an official 120 GB free-space floor;
+   - use SWE-bench's documented “at least 120 GB free” prerequisite as the
+     initial scheduling floor;
    - target no more than about 100 GB of retained Docker images;
    - reserve projected next-image expansion plus evaluation scratch space;
    - allow at most three concurrent/cached Matplotlib instance images; and
@@ -600,7 +624,8 @@ The registry-miss flow is:
 1. Check the NAS registry for the expected digest.
 2. Acquire a single seeding lease.
 3. Resolve the official Docker Hub digest.
-4. Copy registry-to-registry, avoiding a local Docker unpack during seeding.
+4. Copy registry-to-registry with a tool such as Skopeo, avoiding a local
+   Docker unpack during seeding.
 5. Verify the destination digest.
 6. Pull the NAS reference locally by digest.
 
@@ -778,6 +803,7 @@ full-reporting gates pass.
 - [Codex Action security guidance](https://github.com/openai/codex-action/blob/main/docs/security.md)
 - [AgentLens: Revealing the Lucky Pass Problem in SWE-Agent Evaluation](https://arxiv.org/abs/2605.12925)
 - [Docker containerd image store](https://docs.docker.com/engine/storage/containerd/)
+- [Docker Engine 29 release notes and 29.6 size-accounting fixes](https://docs.docker.com/engine/release-notes/29/)
 - [Docker system disk-usage reporting](https://docs.docker.com/reference/cli/docker/system/df/)
 - [Docker image listing and reference filters](https://docs.docker.com/reference/cli/docker/image/ls/)
 - [Docker exact image removal](https://docs.docker.com/reference/cli/docker/image/rm/)
