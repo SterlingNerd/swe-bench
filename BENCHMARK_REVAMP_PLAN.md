@@ -186,6 +186,14 @@ The exact investigated image was
 `swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-25311:latest`, with
 observed digest
 `sha256:767d72ed9ee6c6c85fc54ba39457207c64da5ba6fc56d74580ed419fab0e1d2a`.
+Registry inspection confirmed that this exact canary is a single-platform
+Docker v2 manifest for `linux/amd64`, not a multi-platform image index. Docker
+selecting only the host architecture when pulling a genuinely multi-platform
+image is expected behavior and does not prevent an OCI registry from storing
+the complete index. P1 therefore treats `linux/amd64` as the explicit
+SWE-bench execution contract while preserving enough provenance to distinguish
+a source index from its selected platform manifest.
+
 The audit measured about 3.31 GB of registry content, 11.41 GB of local Docker
 disk usage, and roughly 7 GB of visible image filesystem content; the targeted
 `lib/matplotlib/tests/test_pickle.py::test_complete` evaluation passed. Adjacent
@@ -193,6 +201,15 @@ Matplotlib images had materially different unique compressed sizes, and Django
 images were much smaller. This is the required real-image canary in P1F; the
 plan must not assume images in the same repository family have the same storage
 profile.
+
+The same operational audit also recovered Docker Desktop after a transient WSL
+integration timeout (`Wsl/Service/0x8007274c`, Windows `WSAETIMEDOUT`). After
+Resource Saver was disabled and the integration restarted, both the Ubuntu and
+`docker-desktop` WSL 2 distributions were running and `docker version` reached
+the Docker 29.6.1 server. Automatic launch at Windows sign-in is an operator
+preference, not a runner requirement. P1 must use an engine/API readiness check
+rather than infer that integration is permanently disabled from a single
+missing or stale socket observation.
 
 ## Motivation and benchmark limitations
 
@@ -575,31 +592,52 @@ regressions as the floor for all later phases.
 1. Emit typed events and periodic heartbeats.
 2. Record the last model event, tool event, diff change, provider usage, Docker
    resources, and elapsed budgets.
-3. Record the exact source image reference, digest, platform, official
-   `TestSpec.env_image_key`, registry source, and cache policy.
+3. Record the exact source image reference, manifest media type, nullable
+   source-index digest, selected platform-manifest digest, requested and actual
+   OS/architecture/variant, official `TestSpec.env_image_key`, registry source,
+   copy policy, and cache policy. For this benchmark the requested execution
+   platform is explicitly `linux/amd64`.
 4. Capture Docker usage before pull, after pull, after evaluation, and after
    eviction.
 5. Derive status from SQLite instead of scanning artifacts.
 
 #### P1D — Deterministic image and NAS-registry controller
 
-1. Require Docker 29.6 or newer before automating size decisions because
+1. Add a bounded Docker readiness preflight before storage or image work. It
+   must retry while the engine is starting, prove API readiness with
+   `docker version`/`docker info`, report the active context and server version,
+   and distinguish an absent Desktop process, a starting engine, a missing or
+   stale WSL socket, and an unreachable daemon. It must not start or restart
+   Docker Desktop, shut down WSL, or allocate an attempt on the operator's
+   behalf.
+2. Require Docker 29.6 or newer before automating size decisions because
    recent Docker 29 releases corrected image-size accounting behavior.
-2. Reconcile the active Docker context, image-store backend,
+3. Reconcile the active Docker context, image-store backend,
    `/var/lib/containerd`, all images, and daemon storage before scheduling.
-3. Use a structured API, JSON output, and exact reference filters such as
+4. Use a structured API, JSON output, and exact reference filters such as
    `docker image ls --all --filter "reference=swebench/sweb.*" --format json`.
    Never grep names or manipulate Docker/containerd internal files directly.
-4. Resolve official SWE-bench references and immutable digests.
-5. Retire the per-image `docker save`/`docker load` tar cache. Those archives
+5. Resolve official SWE-bench references and immutable digests. Resolve and
+   record both the source index and selected `linux/amd64` manifest when the
+   source is multi-platform; do not mistake a host-selected pull for missing
+   registry data.
+6. Retire the per-image `docker save`/`docker load` tar cache. Those archives
    duplicate shared parent layers and do not eliminate local unpacked-image
    storage.
-6. Add a configurable writable NAS OCI registry seeded by digest. An optional
+7. Add a configurable writable NAS OCI registry seeded by digest. An optional
    pull-through mirror may be a separate service, but a proxy registry cannot
    accept pushes and remains subject to Docker Hub fair-use limits.
-7. Keep registry credentials on the host; never expose them to task
+8. Keep registry credentials on the host; never expose them to task
    containers.
-8. Start with this policy for a 250 GB local drive:
+9. Keep Docker Desktop's managed disk and native Docker/containerd active image
+   stores on supported local storage. NFS is forbidden as Docker's
+   `data-root`, including outside rootless mode; with the Docker 29 containerd
+   image store, changing Docker's `data-root` does not relocate containerd
+   content or snapshots. NAS capacity belongs behind the registry service, not
+   underneath the runner's active Docker image store. Moving a Docker Desktop
+   disk must use Docker Desktop's supported disk-location control and a local
+   drive.
+10. Start with this policy for a 250 GB local drive:
    - use SWE-bench's documented “at least 120 GB free” prerequisite as the
      initial scheduling floor;
    - target no more than about 100 GB of retained Docker images;
@@ -621,37 +659,51 @@ Implement P1D in four reviewable subphases:
   2. a tiny scratch image survives tag, push, digest verification, pull, and
      registry restart;
   3. Skopeo can copy registry-to-registry with preserved digests;
-  4. the Matplotlib 25311 canary completes the same round trip without proxy,
+  4. a pinned multi-platform fixture preserves its index and child manifests
+     with an explicit `--all` copy, while the normal benchmark path copies and
+     verifies only its selected `linux/amd64` platform manifest;
+  5. the single-platform Matplotlib 25311 canary completes the same round trip
+     without being misclassified as a multi-platform index and without proxy,
      upload-size, timeout, capacity, or storage errors;
-  5. TLS hostname/CA validation, authentication push scope, reverse-proxy
+  6. TLS hostname/CA validation, authentication push scope, reverse-proxy
      `Host`/`X-Forwarded-*` handling, and registry logs are verified; and
-  6. the tests pass again after moving from the local volume to the intended
+  7. the tests pass again after moving from the local volume to the intended
      NAS backend.
 
   If the local-volume tests pass and the NAS-backed tests fail, classify the
   storage backend or mount as the fault rather than changing runner logic.
-  Explicitly qualify network-filesystem permissions and large-upload behavior,
-  or use a supported S3-compatible storage backend. Keep the runner bound to a
-  registry capability/configuration interface, not to Distribution itself, so
-  Harbor or another OCI registry can replace it without changing scheduling.
-- **P1D-1 — Configurable digest-pinned NAS registry:** configuration,
-  credential handling, official-reference resolution, digest-pinned pull, and
+  Run the registry on storage supported by that registry deployment: prefer a
+  filesystem local to the NAS service or a supported S3-compatible backend.
+  A network-mounted registry filesystem, if contemplated, needs explicit
+  vendor support plus permissions, atomic-operation, concurrency, restart, and
+  large-upload qualification. This does not permit NFS as Docker's
+  `data-root`. Keep the runner bound to a registry capability/configuration
+  interface, not to Distribution itself, so Harbor or another OCI registry
+  can replace it without changing scheduling.
+- **P1D-1 — Host readiness and configurable digest-pinned NAS registry:**
+  bounded Docker API preflight, configuration, credential handling,
+  official-reference and platform resolution, digest-pinned pull, and
   structured inventory.
 - **P1D-2 — Single-flight registry seeding on miss:** one owner seeds while
   other workers wait, with bounded backoff and no retry stampede.
 - **P1D-3 — Destination-digest verification and source mapping:** verify the
-  destination manifest digest and record the official-to-NAS mapping before
-  scheduling.
+  selected destination manifest digest and record the official-to-NAS mapping,
+  source-index provenance, and requested/actual platform before scheduling.
 
 The registry-miss flow is:
 
-1. Check the NAS registry for the expected digest.
-2. Acquire a single seeding lease.
-3. Resolve the official Docker Hub digest.
-4. Copy registry-to-registry with a tool such as Skopeo, avoiding a local
+1. Resolve the official source object and determine whether it is a
+   single-platform manifest or an image index.
+2. Select `linux/amd64` and record the source-index digest, when present, plus
+   the selected platform-manifest digest.
+3. Check the NAS registry for the selected expected digest.
+4. Acquire a single seeding lease.
+5. Copy registry-to-registry with a tool such as Skopeo, avoiding a local
    Docker unpack during seeding.
-5. Verify the destination digest.
-6. Pull the NAS reference locally by digest.
+6. Verify the destination platform-manifest digest and, only for an explicitly
+   requested full-index copy, its index and child manifests.
+7. Pull the NAS reference locally by the selected digest and verify the actual
+   platform before scheduling.
 
 #### P1E — Cohort execution, eviction, and circuit breakers
 
@@ -714,10 +766,18 @@ P1 is complete only after all of the following pass:
 - queue continuation without rerunning completed work;
 - status-selective infrastructure retry without automatic agent retry;
 - simulated Docker Hub 429, ENOSPC, registry outage, and digest mismatch;
+- Docker readiness behavior for an engine that is starting, a missing/stale
+  WSL socket, daemon loss during a run, and recovery without allocating a
+  model attempt;
 - acceptance of the correct `swebench/sweb...` namespace and rejection of the
   misspelled `swebbench/...` namespace;
+- a single-platform manifest round trip, a multi-platform full-index round
+  trip, and an explicit `linux/amd64` selected-manifest round trip with all
+  source and destination digests recorded;
 - exact image eviction, shared-layer preservation, and no unrelated-image
   removal;
+- proof that Docker/containerd active storage is not placed on NFS and that
+  NAS capacity is consumed through the qualified registry boundary;
 - enforcement of the stopped-container quarantine cap;
 - a real canary using Matplotlib issue 25311 and its pinned digest;
 - storage remaining inside budget across multiple image cohorts; and
@@ -827,6 +887,12 @@ full-reporting gates pass.
 - [Codex Action security guidance](https://github.com/openai/codex-action/blob/main/docs/security.md)
 - [AgentLens: Revealing the Lucky Pass Problem in SWE-Agent Evaluation](https://arxiv.org/abs/2605.12925)
 - [Docker containerd image store](https://docs.docker.com/engine/storage/containerd/)
+- [Docker daemon data directories and the separate containerd store](https://docs.docker.com/engine/daemon/)
+- [Docker Desktop Resource Saver](https://docs.docker.com/desktop/use-desktop/resource-saver/)
+- [Docker Desktop WSL 2 backend and managed disk location](https://docs.docker.com/desktop/features/wsl/)
+- [Docker multi-platform image and manifest behavior](https://docs.docker.com/build/building/multi-platform/)
+- [Docker NFS `data-root` limitation](https://docs.docker.com/engine/security/rootless/troubleshoot/)
+- [Windows `WSAETIMEDOUT` error definition](https://learn.microsoft.com/en-us/windows/win32/winsock/windows-sockets-error-codes-2)
 - [Docker Engine 29 release notes and 29.6 size-accounting fixes](https://docs.docker.com/engine/release-notes/29/)
 - [Docker system disk-usage reporting](https://docs.docker.com/reference/cli/docker/system/df/)
 - [Docker image listing and reference filters](https://docs.docker.com/reference/cli/docker/image/ls/)
@@ -836,4 +902,4 @@ full-reporting gates pass.
 - [Distribution registry deployment and writable push examples](https://distribution.github.io/distribution/about/deploying/)
 - [Distribution registry releases](https://github.com/distribution/distribution/releases)
 - [Distribution pull-through cache recipe](https://distribution.github.io/distribution/recipes/mirror/)
-- [Skopeo registry-to-registry image copy](https://github.com/containers/skopeo)
+- [Skopeo registry-to-registry image copy and multi-architecture policy](https://github.com/containers/skopeo/blob/main/docs/skopeo-copy.1.md)

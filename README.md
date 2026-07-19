@@ -45,10 +45,31 @@ docker run --rm hello-world
 curl -fsS http://localhost:11434/v1/models
 ```
 
-If `/usr/bin/docker` starts returning an I/O error even though integration was
-already enabled, quit Docker Desktop, run `wsl --shutdown` in Windows
-PowerShell, reopen Docker Desktop, wait for it to report that the engine is
-running, then reopen Ubuntu and repeat the Docker checks above.
+Docker Desktop does not need to start automatically at Windows sign-in. If it
+is started manually, use the server response—not the GUI process alone—as the
+readiness gate. From Windows PowerShell:
+
+```powershell
+docker desktop start --timeout 120
+wsl -d Ubuntu -- bash -lc 'test -S /var/run/docker.sock && docker version >/dev/null'
+```
+
+The second command must exit successfully before launching the harness. For
+long or unattended benchmark runs, disable Docker Desktop Resource Saver so an
+idle interval does not stop its Linux VM. A transient WSL integration error
+such as `Wsl/Service/0x8007274c` is a connection timeout during integration
+startup; use Docker Desktop's **Restart the WSL integration** action, then
+repeat the readiness check.
+
+Reserve `wsl --shutdown` for recovery when the integration remains unhealthy:
+it stops every WSL distribution, including the shell or Codex session running
+the harness. After using it, start Docker Desktop again, reopen Ubuntu, and
+repeat all prerequisite checks.
+
+Keep Docker/containerd's active image store on supported local storage. Do not
+move Docker's `data-root` or Docker Desktop's managed disk onto NFS. The
+planned P1 NAS integration is a separate writable OCI registry with a bounded
+local working set; it is not a network-mounted Docker image store.
 
 ## Quick Start
 
