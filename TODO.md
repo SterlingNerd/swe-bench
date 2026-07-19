@@ -5,6 +5,215 @@
 > flat-output and `docker cp` design below was superseded by manifest-owned,
 > attempt-scoped bind mounts in the 2026-07-19 P0 implementation.
 
+## Active roadmap checklist — reconciled 2026-07-19
+
+This is the durable execution checklist for the current branch. The complete
+rationale, operational evidence, acceptance details, and research references
+are in `BENCHMARK_REVAMP_PLAN.md`. The earlier implementation round was
+mistakenly called “Phase 1,” but its delivered scope was roadmap P0. P1 is not
+complete: queue continuation exists, while the SQLite supervisor, scoped
+leases, status-selective retry, structured heartbeats, budgets, and circuit
+breakers do not.
+
+### P0 — Safety and artifact correctness ✅
+
+- [x] Preserve manifest-owned immutable attempts and stable explicit selection.
+- [x] Verify byte length and SHA-256 before evaluation.
+- [x] Store evaluation as an immutable overlay without mutating attempts.
+- [x] Checkpoint on timeout, TERM, and INT from both agent entrypoints.
+- [x] Capture Docker state and retain stopped containers when artifacts are
+  incomplete.
+- [x] Limit cleanup to exact manifest-owned paths and default partial cleanup to
+  dry-run.
+- [x] Preserve the five Python artifact tests and thirteen shell lifecycle
+  tests as the regression floor.
+
+### P1 — Durable orchestration and bounded image lifecycle
+
+P1 is the next implementation phase and remains incomplete until every P1F
+gate passes.
+
+#### P1A — SQLite supervisor and state reconciliation
+
+- [ ] Add a migrated `state.sqlite` as the transactional scheduling authority;
+  retain manifests as durable audit exports.
+- [ ] Implement `planned -> preparing -> running -> checkpointing -> collected
+  -> terminal/retryable`.
+- [ ] Reconcile existing manifest-backed runs without changing finalized
+  attempts.
+- [ ] Keep the default worker count at one.
+
+#### P1B — Leases, recovery, and retry semantics
+
+- [ ] Replace global `flock` with owner/expiry leases scoped to runs and
+  attempts.
+- [ ] Reclaim expired `preparing`/`running` work after Docker, WSL, or
+  supervisor failure.
+- [ ] Keep queue continuation, infrastructure retry, agent retry, and Codex
+  session continuation separate and auditable.
+- [ ] Finish storage/image preparation before allocating a model attempt, so
+  an image pull, rate limit, registry error, or ENOSPC does not consume pass@1
+  or become a model DNF.
+- [ ] Add status-selective infrastructure retry; never automatically retry a
+  baseline agent failure.
+
+#### P1C — Structured observability
+
+- [ ] Emit typed events and periodic heartbeats.
+- [ ] Record last model event, tool event, diff change, provider usage, Docker
+  resources, and elapsed budgets.
+- [ ] Record exact official image ref/digest/platform,
+  `TestSpec.env_image_key`, registry source, and cache policy.
+- [ ] Snapshot Docker usage before pull, after pull, after evaluation, and
+  after eviction.
+- [ ] Derive status from SQLite rather than artifact scanning.
+
+#### P1D — Deterministic image and NAS-registry controller
+
+Operational requirements from the latest run and screenshots:
+
+- a roughly 250-task run filled local disk;
+- about 150 GB of Docker images accumulated on a 250 GB drive;
+- Django images were reported near 500 MB and some Matplotlib images near 3 GB
+  compressed, with larger local unpacked usage;
+- Docker Hub rate limiting blocked more pulls; and
+- an agent changed the correctly identified `swebench/` prefix to the invalid
+  `swebbench/` spelling while grepping.
+
+Therefore image control is deterministic host-side infrastructure, never an
+LLM shell task and never direct manipulation of Docker/containerd files.
+
+- [ ] Require Docker 29.6+ before using automated image-size decisions.
+- [ ] Reconcile active Docker context, image-store backend,
+  `/var/lib/containerd`, all images, and daemon/filesystem storage.
+- [ ] Use Docker APIs/structured JSON and exact filters, including
+  `docker image ls --all --filter "reference=swebench/sweb.*" --format json`;
+  reject `swebbench/...`.
+- [ ] Resolve the official SWE-bench image reference and immutable digest.
+- [ ] Retire per-image `docker save`/`docker load` archives because they
+  duplicate shared parents and still need local unpacked storage.
+- [ ] Keep registry credentials host-side and out of task containers.
+- [ ] Add a writable NAS OCI registry for digest-pinned images. Keep any
+  pull-through proxy separate because proxy mode cannot accept pushes and does
+  not eliminate Docker Hub fair-use limits.
+- [ ] Enforce the initial 250 GB drive policy: official 120 GB free-space
+  scheduling floor, about 100 GB maximum retained Docker images, reservation
+  for next-image expansion plus evaluation scratch, at most three concurrent
+  or cached Matplotlib instance images, and a separate small quarantine budget.
+
+Subphases:
+
+- [ ] **P1D-1:** add the configurable digest-pinned NAS registry, credentials,
+  reference resolution, digest-pinned pull, and structured inventory.
+- [ ] **P1D-2:** add single-flight seeding on a NAS miss with a seeding lease,
+  bounded wait, and no retry stampede.
+- [ ] **P1D-3:** verify the destination digest and persist the official-to-NAS
+  source mapping before scheduling.
+
+NAS miss flow:
+
+1. Check the NAS for the expected digest.
+2. Acquire one seeding lease.
+3. Resolve the official Docker Hub digest.
+4. Copy registry-to-registry rather than unpacking into local Docker.
+5. Verify the destination digest.
+6. Pull the NAS reference locally by digest.
+
+#### P1E — Cohort execution, eviction, and circuit breakers
+
+- [ ] Group by official `TestSpec.env_image_key`, not repository string.
+- [ ] Implement the exact lifecycle:
+
+  `resolve digest -> reserve local space -> check/seed NAS -> pull from NAS by
+  digest -> solve -> checkpoint/finalize -> evaluate -> persist immutable
+  overlay -> remove container -> release image lease -> remove exact local
+  image -> remeasure storage`
+
+- [ ] Evaluate before eviction. Do not delete the image merely because the
+  solve container stopped.
+- [ ] Use evaluator `--cache_level env --clean True` where applicable or
+  explicit exact-digest cleanup after the immutable evaluation overlay.
+  `cache_level=env` alone is insufficient because solve-pulled images predate
+  evaluator startup and `clean=False` preserves them.
+- [ ] Never invoke `docker system prune -a` from the runner.
+- [ ] Add global circuit breakers and bounded backoff for storage
+  reservation/ENOSPC, Hub 429, auth failure, registry outage, digest mismatch,
+  and Docker daemon loss.
+- [ ] Inspect evaluator `error_ids` and per-instance logs even when the
+  evaluator exits zero.
+- [ ] Record infrastructure statuses as
+  `image_pull_rate_limited`, `image_pull_authentication_error`,
+  `image_not_found`, `registry_unavailable`, `image_digest_mismatch`,
+  `image_storage_exhausted`, `docker_daemon_unavailable`, or
+  `evaluation_harness_error`; none counts as model DNF.
+- [ ] Remove only the exact ref/digest, without force, after no live or retained
+  container and no worker/evaluator lease needs it. Preserve unrelated images
+  and referenced shared layers.
+- [ ] Defer eviction to the bounded quarantine budget while an incomplete
+  stopped container or another worker/evaluator still holds a lease.
+
+Subphases:
+
+- [ ] **P1E-1:** make one image lease span solve and evaluation until durable
+  evaluation artifacts exist.
+- [ ] **P1E-2:** add exact post-evaluation eviction, storage remeasurement, and
+  tests proving shared layers and unrelated images survive.
+- [ ] **P1E-3:** add bounded quarantine and explicit storage-pressure
+  exceptions.
+
+#### P1F — Completion gate
+
+- [ ] Recover from a crash at every state transition.
+- [ ] Pass two-supervisor contention and lease-expiry recovery tests.
+- [ ] Continue a queue without rerunning completed work.
+- [ ] Retry only eligible infrastructure failures.
+- [ ] Pass simulated Hub 429, ENOSPC, registry outage, and digest mismatch.
+- [ ] Accept `swebench/sweb...` and reject `swebbench/...`.
+- [ ] Prove exact eviction, shared-layer preservation, no unrelated removal,
+  and quarantine-cap enforcement.
+- [ ] Run the real
+  `swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-25311` canary pinned to
+  digest
+  `sha256:767d72ed9ee6c6c85fc54ba39457207c64da5ba6fc56d74580ed419fab0e1d2a`.
+- [ ] Stay within the storage budget across multiple image cohorts.
+- [ ] Prove SQLite, scoped leases, heartbeats, budgets, and circuit breakers
+  exist and the global lock is gone.
+
+### P2 — Provider profiles and credential isolation
+
+- [ ] **P2A:** add named local, baseline Codex, and guarded profiles plus
+  provider/model capability preflight; keep the pinned stable CLI until an
+  intentional benchmark-version change.
+- [ ] **P2B:** add a host/sidecar Responses proxy and isolated Docker network.
+- [ ] **P2C:** issue run-scoped tokens and enforce request, token, time, and
+  spend quotas.
+- [ ] **P2D:** prove task processes cannot access upstream credentials or
+  bypass the metered proxy.
+
+### P3 — Loop analysis and guarded experiments
+
+- [ ] **P3A:** normalize trajectories into typed events and label all twelve
+  partial-run DNFs.
+- [ ] **P3B:** run the loop/no-progress detector in shadow mode only.
+- [ ] **P3C:** use the correct-`swebench/` then wrong-`swebbench/` grep as a
+  contradiction fixture; keep infrastructure deterministic outside the agent.
+- [ ] **P3D:** audit false positives and thresholds before allowing one bounded,
+  explicitly named recovery.
+- [ ] **P3E:** run a paired frozen baseline-versus-guarded pilot.
+
+### P4 — Bounded throughput
+
+- [ ] **P4A:** add separate bounded solve/evaluation pools, initially one
+  worker each.
+- [ ] **P4B:** schedule with CPU, memory, provider, and projected image-expansion
+  resource tokens pinned in the manifest.
+- [ ] **P4C:** scale through attended 5-task batches, an 8–12 smoke set, a fixed
+  50-task pilot, then a 100-task confirmation.
+- [ ] **P4D:** attempt all 500 only after storage, retry, cost, isolation,
+  reproducibility, and full-reporting gates pass.
+
+---
+
 ## Overview
 
 Transform the harness from a single-agent tool into a multi-agent platform with proper isolation, structured error handling, and narrowed cleanup scope.
