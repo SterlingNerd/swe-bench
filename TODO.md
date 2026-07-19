@@ -33,6 +33,17 @@ breakers do not.
 P1 is the next implementation phase and remains incomplete until every P1F
 gate passes.
 
+Current code facts this phase must remove:
+
+- the global `/tmp/swe-bench-run.lock` `flock`;
+- hard-coded `SWEBENCH_REGISTRY="swebench"`;
+- a storage preflight that checks only repository-filesystem `df` usage;
+- per-image `docker save`/`docker load` tar archives and the false help claim
+  that loading them keeps images off local disk;
+- model-attempt allocation before dataset/image/storage preparation;
+- evaluator `--cache_level instance` without `--clean True`; and
+- manifests without exact image ref/digest/platform/registry provenance.
+
 #### P1A — SQLite supervisor and state reconciliation
 
 - [ ] Add a migrated `state.sqlite` as the transactional scheduling authority;
@@ -80,6 +91,11 @@ Operational requirements from the latest run and screenshots:
 - an agent changed the correctly identified `swebench/` prefix to the invalid
   `swebbench/` spelling while grepping.
 
+The Matplotlib 25311 canary measured about 3.31 GB of registry content, 11.41 GB
+of local Docker disk usage, and roughly 7 GB of visible filesystem content; its
+targeted `test_complete` evaluation passed. Adjacent images varied materially,
+so scheduling cannot use one repository-family size assumption.
+
 Therefore image control is deterministic host-side infrastructure, never an
 LLM shell task and never direct manipulation of Docker/containerd files.
 
@@ -96,10 +112,11 @@ LLM shell task and never direct manipulation of Docker/containerd files.
 - [ ] Add a writable NAS OCI registry for digest-pinned images. Keep any
   pull-through proxy separate because proxy mode cannot accept pushes and does
   not eliminate Docker Hub fair-use limits.
-- [ ] Enforce the initial 250 GB drive policy: official 120 GB free-space
-  scheduling floor, about 100 GB maximum retained Docker images, reservation
-  for next-image expansion plus evaluation scratch, at most three concurrent
-  or cached Matplotlib instance images, and a separate small quarantine budget.
+- [ ] Enforce the initial 250 GB drive policy: use SWE-bench's documented “at
+  least 120 GB free” prerequisite as the scheduling floor, retain at most about
+  100 GB of Docker images, reserve next-image expansion plus evaluation
+  scratch, allow at most three concurrent/cached Matplotlib instance images,
+  and maintain a separate small quarantine budget.
 
 Subphases:
 
@@ -115,7 +132,8 @@ NAS miss flow:
 1. Check the NAS for the expected digest.
 2. Acquire one seeding lease.
 3. Resolve the official Docker Hub digest.
-4. Copy registry-to-registry rather than unpacking into local Docker.
+4. Copy registry-to-registry with a tool such as Skopeo rather than unpacking
+   into local Docker.
 5. Verify the destination digest.
 6. Pull the NAS reference locally by digest.
 
