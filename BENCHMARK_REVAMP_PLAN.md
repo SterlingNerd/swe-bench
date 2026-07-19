@@ -1,7 +1,8 @@
 # SWE-bench Harness Revamp Plan
 
-- **Status:** P0 safety and correctness implemented; P1 completion is next;
-  P2-P4 remain planned.
+- **Status:** P0 safety and correctness implemented; the isolated P1A state
+  foundation and local-volume portion of P1D-0 are implemented; live runner
+  activation and the real NAS P1D-0 gate remain before P1 can continue.
 - **Target:** `agent/codex-swebench-runner`
 - **Last researched:** 2026-07-19
 - **Last implemented:** 2026-07-19
@@ -29,8 +30,9 @@ The redesigned harness should:
 
 Implemented on `agent/codex-swebench-runner` on 2026-07-19. This phase keeps
 `run.sh` as the compatibility wrapper and introduces a JSON-manifest artifact
-layer. The SQLite supervisor, leases, richer failure classifier, paid-provider
-proxy, loop detector, and bounded concurrency remain deferred to P1-P4.
+layer. Live SQLite scheduling, leases, richer failure classification,
+paid-provider proxy, loop detection, and bounded concurrency remain deferred
+to P1-P4.
 
 ### Delivered
 
@@ -102,14 +104,90 @@ python3 -B -m unittest -v tests/test_run_artifacts.py
 bash tests/test_harness.sh
 ```
 
-### Deferred from the larger plan
+### Deferred from the larger plan after P0
 
-- SQLite state machine, crash-recovery leases, and status-selective retries;
+- activation of the P1A SQLite state machine in `run.sh`, crash-recovery
+  leases, and status-selective retries;
 - structured heartbeats and no-progress/tool/model-stream budgets;
 - full failure taxonomy and automated provider/infrastructure classification;
 - run-scoped paid-provider proxy and network isolation;
 - shadow loop analysis and guarded recovery profiles; and
 - bounded parallel workers and global spend/resource circuit breakers.
+
+## Implementation round 2 log — isolated P1A foundation and P1D-0 local gate
+
+Implemented and smoke-qualified on `agent/codex-swebench-runner` on
+2026-07-19. This round deliberately stops before changing the live `run.sh`
+scheduler.
+
+### P1A state foundation delivered
+
+- Added `scripts/run_state.py` with schema version 1, a forward-only migration
+  ledger, `BEGIN IMMEDIATE` transactions, foreign keys, a 30-second busy
+  timeout, `synchronous=FULL`, and rollback-journal mode.
+- Avoided WAL deliberately. SQLite documents that WAL requires all processes
+  on one host, and its July 2026 WAL-reset advisory includes the host's SQLite
+  3.45.1 in the affected range. The rollback journal is the conservative
+  supervisor default until a fixed SQLite is guaranteed.
+- Added the complete state vocabulary and guarded transition surface:
+  `planned -> preparing -> running -> checkpointing -> collected ->
+  terminal/retryable`.
+- Added reconciliation that imports existing manifest tasks and attempts,
+  preserves finalized attempt descriptors, and exports scheduler state and an
+  append-only event view beside the human-readable manifest.
+- Pinned schema-level worker count to one. The schema also reserves the lease,
+  event, budget, circuit-breaker, evaluation, and image-lease records needed by
+  later P1 integration; their presence is not a claim that `run.sh` uses them
+  yet.
+- Added four focused smoke tests covering migration/journal mode, lifecycle
+  invariants, finalized-attempt reconciliation, and rejection of a newer
+  unknown schema before applying DDL.
+
+The focused P1A smoke command is:
+
+```bash
+python3 -B -m unittest -v tests/test_run_state.py
+```
+
+P1A is an isolated, tested foundation in this round. It does **not** become the
+live scheduling authority until P1B wires claims, preparation, attempt
+allocation, heartbeats, finalization, and recovery through it and removes the
+global shell lock. This boundary avoids running two divergent authorities in
+production.
+
+### P1D-0 local qualification evidence
+
+The independent local-volume qualification passed with Distribution 3.1.1
+(`registry:3`) at `127.0.0.1:5001`, using a fresh named volume and no proxy or
+read-only configuration:
+
+- `/v2/` returned HTTP 200 with
+  `Docker-Distribution-API-Version: registry/2.0`.
+- The selected `linux/amd64` `hello-world` manifest was pushed, pulled, and
+  pulled again after registry restart at digest
+  `sha256:d1a8d0a4eeb63aff09f5f34d4d80505e0ba81905f36158cc3970d8e07179e59e`.
+- Containerized Skopeo copied the complete `hello-world` multi-platform index
+  registry-to-registry with `--all`; source and destination index digests both
+  resolved to
+  `sha256:c3cbe1cc1aa588a64951ac6286e0df7b27fe2e6324b1001c619bb358770c0178`
+  and the destination contained 22 child manifests.
+- The real single-platform Matplotlib 25311 image pushed successfully as
+  `linux/amd64`; the destination manifest preserved
+  `sha256:767d72ed9ee6c6c85fc54ba39457207c64da5ba6fc56d74580ed419fab0e1d2a`
+  and remained a Docker v2 single-platform manifest rather than an image
+  index.
+- Registry logs showed successful blob uploads and manifest writes. The
+  disposable container, volume, temporary tags, downloaded qualification
+  images, and header file were removed afterward; the operator's pre-existing
+  Matplotlib and `hello-world` images were preserved.
+
+This proves the runner's required single-platform and full-index mechanics on
+a local registry. P1D-0 remains open until the intended NAS deployment repeats
+the persistence and large-image tests and proves TLS hostname/CA validation,
+push authorization, reverse-proxy headers and upload limits, concurrency, and
+capacity on its actual storage backend. A NAS-only failure is a deployment or
+storage-backend failure, not evidence that every architecture is required for
+the normal `linux/amd64` benchmark path.
 
 ### Roadmap-status correction
 
@@ -118,7 +196,8 @@ delivered scope is roadmap **P0**, not roadmap P1. Queue continuation is the
 only material P1 behavior already present. An audit of the branch confirms
 that P1 is not complete:
 
-- there is no SQLite supervisor or durable scheduling state machine;
+- the P1A SQLite supervisor module exists, but the live shell path does not yet
+  use it as scheduling authority;
 - the global `flock` still serializes the entire runner;
 - there is no status-selective infrastructure retry;
 - there are no structured heartbeats or resource/provider metrics; and
@@ -903,3 +982,4 @@ full-reporting gates pass.
 - [Distribution registry releases](https://github.com/distribution/distribution/releases)
 - [Distribution pull-through cache recipe](https://distribution.github.io/distribution/recipes/mirror/)
 - [Skopeo registry-to-registry image copy and multi-architecture policy](https://github.com/containers/skopeo/blob/main/docs/skopeo-copy.1.md)
+- [SQLite write-ahead logging requirements and 2026 WAL-reset advisory](https://www.sqlite.org/wal.html)
