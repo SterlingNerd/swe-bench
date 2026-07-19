@@ -1,5 +1,10 @@
 # SWE-bench Multi-Agent Harness — Implementation Plan
 
+> Historical implementation record. The current architecture and remaining
+> work are tracked in `BENCHMARK_REVAMP_PLAN.md`. In particular, the legacy
+> flat-output and `docker cp` design below was superseded by manifest-owned,
+> attempt-scoped bind mounts in the 2026-07-19 P0 implementation.
+
 ## Overview
 
 Transform the harness from a single-agent tool into a multi-agent platform with proper isolation, structured error handling, and narrowed cleanup scope.
