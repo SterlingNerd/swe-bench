@@ -1,0 +1,21 @@
+# This template is rendered into an ephemeral CODEX_HOME by entrypoint.sh.
+model = "__SWE_CODEX_MODEL__"
+model_provider = "local_swebench"
+model_reasoning_effort = "high"
+model_reasoning_summary = "none"
+model_supports_reasoning_summaries = false
+model_context_window = __SWE_CODEX_CONTEXT_WINDOW__
+model_auto_compact_token_limit = __SWE_CODEX_AUTO_COMPACT_TOKEN_LIMIT__
+personality = "none"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+web_search = "disabled"
+
+[model_providers.local_swebench]
+name = "SWE-bench Responses API"
+base_url = "__SWE_CODEX_BASE_URL__"
+env_key = "SWE_CODEX_API_KEY"
+wire_api = "responses"
+request_max_retries = 2
+stream_max_retries = 2
+stream_idle_timeout_ms = 300000

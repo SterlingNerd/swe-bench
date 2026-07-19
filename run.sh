@@ -4,7 +4,9 @@
 #
 # Architecture: Self-contained agent bundles mounted into swebench eval images.
 # Each instance has a pre-built swebench image; we mount the bundle read-only
-# at /agent. Outputs are written inside the container and copied out via docker cp.
+# at /agent. Every invocation writes to a new manifest-owned attempt directory.
+# Containers are inspected before removal and invalid/incomplete attempts are
+# retained for diagnosis.
 #
 # Two phases:
 #   [WORK]  --run / --run-all    Run agents against instances (collect patches)
@@ -16,11 +18,11 @@
 #   ./run.sh --list [filter]     List problems (optional grep filter)
 #   ./run.sh --build [agent]     Build agent bundle(s) only
 #   ./run.sh --rebuild [scope] Rebuild from scratch (--no-cache): all|<agent>
-#   ./run.sh --run <agent> <id>         [WORK] Run agent against a specific instance
-#   ./run.sh --run-all <agent> [--timeout N] [--resume]  [WORK] Run all instances
-#   ./run.sh --eval <agent>             [EVAL] Evaluate collected patches
-#   ./run.sh --summarize [agent]        Combine and summarize results
-#   ./run.sh --status [agent]           Show completion status
+#   ./run.sh --run <agent> <id> [TIMEOUT] [--run-id ID]  Run one instance
+#   ./run.sh --run-all <agent> [--timeout N] [--resume] [--run-id ID]
+#   ./run.sh --eval <agent> [--run-id ID]  Evaluate selected attempts
+#   ./run.sh --summarize [agent] [--run-id ID]
+#   ./run.sh --status [agent] [--run-id ID]
 #   ./run.sh --interactive <agent> <id> Drop into an agent's eval image
 #   ./run.sh --init              Install swebench harness (creates .venv/swebench)
 #
@@ -41,8 +43,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
 AGENTS_DIR="${REPO_ROOT}/agents"
-OUTPUT_DIR="${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}/outputs"
 WORKSPACE_DIR="${SWE_WORKSPACE_DIR:-${REPO_ROOT}/workspace}"
+RUNS_DIR="${WORKSPACE_DIR}/runs"
+ARTIFACT_TOOL="${REPO_ROOT}/scripts/run_artifacts.py"
 CACHE_FILE="/tmp/swe_verified_cache.json"
 HF_DATASET="princeton-nlp/SWE-bench_Verified"
 
@@ -54,29 +57,68 @@ mkdir -p "$(dirname "$LOG_FILE")"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # ==============================================================================
-# SIGNAL HANDLING — clean ^C / ERR / EXIT
+# SIGNAL HANDLING — checkpoint and stop only the active container
 # ==============================================================================
-STOPPED=0
-stop_running_containers() {
-    [ "$STOPPED" -eq 1 ] && return
-    STOPPED=1
-    docker ps --format '{{.Names}}' 2>/dev/null | grep '^swe_' | while read -r cname; do
-        echo "  Stopping container: ${cname}"
-        docker stop "$cname" >/dev/null 2>&1 || true
-    done
+ACTIVE_CONTAINER=""
+ACTIVE_ATTEMPT_DIR=""
+INTERRUPT_REQUESTED=0
+
+write_termination_request() {
+    local requested_status="$1"
+    local reason="$2"
+    local timeout_seconds="${3:-0}"
+    [ -n "$ACTIVE_ATTEMPT_DIR" ] || return 0
+    ATTEMPT_DIR="$ACTIVE_ATTEMPT_DIR" REQUESTED_STATUS="$requested_status" \
+        TERMINATION_REASON="$reason" TIMEOUT_SECONDS="$timeout_seconds" python3 - <<'PY'
+import json
+import os
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+target = Path(os.environ["ATTEMPT_DIR"]) / "termination-request.json"
+payload = {
+    "schema_version": 1,
+    "requested_status": os.environ["REQUESTED_STATUS"],
+    "reason": os.environ["TERMINATION_REASON"],
+    "requested_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    "timeout_seconds": int(os.environ["TIMEOUT_SECONDS"]),
 }
+fd, name = tempfile.mkstemp(prefix=".termination-request.", dir=target.parent)
+try:
+    with os.fdopen(fd, "w") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(name, target)
+finally:
+    Path(name).unlink(missing_ok=True)
+PY
+}
+
 on_interrupt() {
+    INTERRUPT_REQUESTED=1
     echo ""
     echo "=============================================================================="
-    echo "  ^C received — shutting down..."
+    echo "  Interrupt received — requesting an artifact checkpoint..."
     echo "=============================================================================="
-    stop_running_containers
-    echo "  Cleanup complete. Goodbye."
-    echo "=============================================================================="
-    exit 130
+    if [ -n "$ACTIVE_CONTAINER" ]; then
+        write_termination_request "operator_cancelled" "operator_interrupt" 0 || true
+        docker stop --signal=TERM --time 30 "$ACTIVE_CONTAINER" >/dev/null 2>&1 || true
+    else
+        exit 130
+    fi
 }
 trap on_interrupt INT TERM
-trap stop_running_containers EXIT
+on_exit() {
+    if [ -n "$ACTIVE_CONTAINER" ]; then
+        echo "  Stopping active container during runner exit: ${ACTIVE_CONTAINER}" >&2
+        write_termination_request "container_error" "runner_exit" 0 || true
+        docker stop --signal=TERM --time 30 "$ACTIVE_CONTAINER" >/dev/null 2>&1 || true
+    fi
+}
+trap on_exit EXIT
 
 # ==============================================================================
 # SINGLE INSTANCE LOCK — ensure only one instance of this script runs at a time
@@ -130,32 +172,133 @@ ensure_docker() {
 
 record_host_result() {
     local result_file="$1"
-    local status="$2"
+    local status_override="$2"
     local container_exit_code="$3"
     local elapsed_seconds="$4"
+    local wait_monitor_exit_code="$5"
+    local timeout_seconds="$6"
+    local container_state_file="$7"
+    local artifacts_complete="$8"
+    local retained_container="${9:-}"
 
-    RESULT_FILE="$result_file" RESULT_STATUS="$status" \
+    RESULT_FILE="$result_file" RESULT_STATUS_OVERRIDE="$status_override" \
         CONTAINER_EXIT_CODE="$container_exit_code" ELAPSED_SECONDS="$elapsed_seconds" \
+        WAIT_MONITOR_EXIT_CODE="$wait_monitor_exit_code" TIMEOUT_SECONDS="$timeout_seconds" \
+        CONTAINER_STATE_FILE="$container_state_file" ARTIFACTS_COMPLETE="$artifacts_complete" \
+        RETAINED_CONTAINER="$retained_container" \
         python3 - <<'PY'
 import json
 import os
+import tempfile
+from pathlib import Path
 
-path = os.environ["RESULT_FILE"]
-result = {}
+path = Path(os.environ["RESULT_FILE"])
 try:
-    with open(path) as handle:
+    with path.open() as handle:
         result = json.load(handle)
-except (FileNotFoundError, json.JSONDecodeError, ValueError):
-    pass
+except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
+    raise SystemExit(f"cannot augment invalid result: {path}: {exc}")
+
+state = {}
+state_path = Path(os.environ["CONTAINER_STATE_FILE"])
+if state_path.is_file():
+    try:
+        state = json.load(state_path.open())
+    except (json.JSONDecodeError, OSError):
+        state = {}
+
+termination_request = {}
+request_path = path.with_name("termination-request.json")
+if request_path.is_file():
+    try:
+        termination_request = json.load(request_path.open())
+    except (json.JSONDecodeError, OSError):
+        termination_request = {}
 
 result.update({
-    "status": os.environ["RESULT_STATUS"],
+    "schema_version": 1,
     "container_exit_code": int(os.environ["CONTAINER_EXIT_CODE"]),
     "elapsed_seconds": int(os.environ["ELAPSED_SECONDS"]),
+    "wait_monitor_exit_code": int(os.environ["WAIT_MONITOR_EXIT_CODE"]),
+    "timeout_seconds": int(os.environ["TIMEOUT_SECONDS"]),
+    "artifacts_complete": os.environ["ARTIFACTS_COMPLETE"] == "1",
+    "container": {
+        "oom_killed": bool(state.get("OOMKilled", False)),
+        "error": state.get("Error", ""),
+        "started_at": state.get("StartedAt"),
+        "finished_at": state.get("FinishedAt"),
+    },
 })
-result.setdefault("patch_bytes", 0)
-with open(path, "w") as handle:
-    json.dump(result, handle, indent=2)
+override = os.environ["RESULT_STATUS_OVERRIDE"]
+if override:
+    result["status"] = override
+if termination_request:
+    host_reasons = {
+        "timed_out": "hard_timeout",
+        "operator_cancelled": "operator_interrupt",
+        "container_error": "wait_monitor_error",
+    }
+    result["finalization_reason"] = host_reasons.get(
+        override,
+        termination_request.get("reason", result.get("finalization_reason")),
+    )
+    result["termination_requested_at"] = termination_request.get(
+        "requested_at", result.get("termination_requested_at")
+    )
+    result["termination_signal"] = result.get("termination_signal") or "TERM"
+    if override in {"timed_out", "operator_cancelled"}:
+        result["partial_patch"] = True
+retained = os.environ["RETAINED_CONTAINER"]
+if retained:
+    result["retained_container"] = retained
+else:
+    result.pop("retained_container", None)
+
+patch_path = path.with_name("patch.diff")
+result["patch_bytes"] = patch_path.stat().st_size
+fd, name = tempfile.mkstemp(prefix=".result.", dir=path.parent)
+try:
+    with os.fdopen(fd, "w") as handle:
+        json.dump(result, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(name, path)
+finally:
+    Path(name).unlink(missing_ok=True)
+PY
+}
+
+record_host_observation() {
+    local observation_file="$1" status="$2" elapsed="$3" monitor_rc="$4" retained="$5"
+    OBSERVATION_FILE="$observation_file" OBSERVATION_STATUS="$status" \
+        ELAPSED_SECONDS="$elapsed" WAIT_MONITOR_EXIT_CODE="$monitor_rc" \
+        RETAINED_CONTAINER="$retained" python3 - <<'PY'
+import json
+import os
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+path = Path(os.environ["OBSERVATION_FILE"])
+payload = {
+    "schema_version": 1,
+    "status": os.environ["OBSERVATION_STATUS"],
+    "elapsed_seconds": int(os.environ["ELAPSED_SECONDS"]),
+    "wait_monitor_exit_code": int(os.environ["WAIT_MONITOR_EXIT_CODE"]),
+    "retained_container": os.environ["RETAINED_CONTAINER"],
+    "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+}
+fd, name = tempfile.mkstemp(prefix=".host-observation.", dir=path.parent)
+try:
+    with os.fdopen(fd, "w") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(name, path)
+finally:
+    Path(name).unlink(missing_ok=True)
 PY
 }
 
@@ -212,23 +355,32 @@ do_cleanup() {
     echo "=== Cleanup complete ==="
 }
 
+resolve_run_dir() {
+    local agent="$1" run_id="${2:-}"
+    local args=(resolve-run --runs-dir "$RUNS_DIR" --agent "$agent")
+    [ -n "$run_id" ] && args+=(--run-id "$run_id")
+    python3 "$ARTIFACT_TOOL" "${args[@]}"
+}
+
 do_cleanup_partial() {
-    echo "=== Cleaning up partial/empty output directories ==="
-    local removed=0 kept=0
-    [ -d "$OUTPUT_DIR" ] || { echo "No outputs directory found."; return 0; }
-    for d in "${OUTPUT_DIR}"/*/; do
-        [ -d "$d" ] || continue
-        local iid=$(basename "$d")
-        # Skip if it has a complete result
-        if [ -f "${d}result.json" ] && [ -f "${d}patch.diff" ]; then
-            kept=$((kept + 1))
-            continue
-        fi
-        echo "  Removing: ${iid}/"
-        rm -rf "$d"
-        removed=$((removed + 1))
+    local agent="" run_id="" apply=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --agent) agent="${2:?--agent requires a value}"; shift 2 ;;
+            --run-id) run_id="${2:?--run-id requires a value}"; shift 2 ;;
+            --apply) apply=1; shift ;;
+            *) echo "Unknown option: $1"; return 2 ;;
+        esac
     done
-    echo "=== Removed ${removed}, kept ${kept} complete ==="
+    if [ -z "$agent" ]; then
+        echo "ERROR: --cleanup-partial requires --agent so cleanup cannot cross run ownership." >&2
+        return 2
+    fi
+    local run_dir
+    run_dir=$(resolve_run_dir "$agent" "$run_id") || return
+    local args=(cleanup-partial --run-dir "$run_dir")
+    [ "$apply" -eq 1 ] && args+=(--apply)
+    python3 "$ARTIFACT_TOOL" "${args[@]}"
 }
 
 # Save swebench image to cache (NAS/external storage)
@@ -348,36 +500,37 @@ COMMANDS
         <agent>     only that agent bundle
       Use this to upgrade pi or refresh cached layers. Skips nothing.
 
-  --run <AGENT> <INSTANCE_ID> [TIMEOUT]    [WORK]
+  --run <AGENT> <INSTANCE_ID> [TIMEOUT] [--run-id ID] [--profile NAME]    [WORK]
       Run an agent against a single instance. AGENT is a folder name under
       agents/ (e.g. pi, codex). INSTANCE_ID is like django__django-11039.
       Optional TIMEOUT overrides the default 3600s per-instance timeout.
       Spins up the swebench eval image for that instance, mounts our agent
       bundle read-only at /agent, and calls entrypoint.sh inside it.
-      Results are written to <workspace>/outputs/<AGENT>/<INSTANCE_ID>/. 
+      Allocates a new immutable attempt under
+      <workspace>/runs/<RUN_ID>/tasks/<INSTANCE_ID>/attempts/. If --run-id is
+      omitted, a unique run ID is generated.
 
-  --run-all <AGENT> [--timeout N] [--resume]    [WORK]
+  --run-all <AGENT> [--timeout N] [--resume] [--run-id ID] [--profile NAME]    [WORK]
       Run an agent against every cached instance (all 500 verified instances),
-      collecting one patch per instance under <workspace>/outputs/<AGENT>/. 
-      --timeout N  Kill containers exceeding N seconds (default: 3600 = 1 hour)
-      --resume     Skip instances that already have a result.json
+      recording ordered tasks and isolated attempts in one run manifest.
+      --timeout N  Request checkpoint/termination after N seconds (default: 3600)
+      --resume     Continue the named/latest run; run only untouched tasks
+      --run-id ID  Create or resume an explicit durable run
       Long-running: consider running in the background.
 
-  --eval <AGENT>    [EVAL]
-      Evaluate the patches collected for AGENT in a previous run using the
-      official swebench harness. Requires Docker (pulls eval images per
-      instance) and network access. Run './run.sh --init' first to install
-      the swebench Python package.
+  --eval <AGENT> [--run-id ID]    [EVAL]
+      Evaluate only the attempts explicitly selected in the run manifest.
+      Patch digests are checked before predictions are created. Evaluation is
+      recorded as a report overlay and never rewrites finalized attempts.
+      Omitting --run-id resolves the latest recorded run for AGENT.
 
-  --summarize [AGENT]
-      Combine and summarize results into outputs/<agent>/summary.json and print
-      a table (status / local_eval / patch size). If AGENT is omitted, summarize
-      each agent output directory independently.
+  --summarize [AGENT] [--run-id ID]
+      Derive reports/summary.json from a run manifest, its attempts, and latest
+      evaluation overlay. If AGENT is omitted, summarize each latest agent run.
 
-  --status [AGENT]
-      Summarize progress of collected runs: totals plus per-instance status
-      (resolved / failed / no patch / timeout / error). If AGENT is omitted,
-      show every agent output directory.
+  --status [AGENT] [--run-id ID]
+      Show manifest-backed progress without mutating attempt artifacts. If
+      AGENT is omitted, show each agent's latest recorded run.
 
   --interactive <AGENT> <INSTANCE_ID>
       Drop into an interactive shell inside the swebench eval image for that
@@ -392,10 +545,10 @@ COMMANDS
       Remove only harness-owned swe_* containers and swebench/sweb.* images.
       Unrelated Docker resources are never touched.
 
-  --cleanup-partial
-      Remove output directories that are missing result.json or patch.diff
-      (i.e., failed or interrupted runs). Keeps complete runs intact so you
-      can inspect their debug files (agent_output.txt, pi-sessions/) first.
+  --cleanup-partial --agent AGENT [--run-id ID] [--apply]
+      List only manifest-owned, unfinalized attempt directories. This is a
+      dry-run unless --apply is supplied. Finalized or selected attempts and
+      legacy workspace/outputs trees are never deletion candidates.
 
 ENVIRONMENT
   SWEBENCH_IMAGE_CACHE
@@ -407,8 +560,9 @@ ENVIRONMENT
   MAX_STORAGE_PCT
       Disk usage percentage threshold to trigger cleanup warning (default: 80)
   SWE_WORKSPACE_DIR
-      Root of the workspace (default: ./workspace). The outputs directory is
-      derived from it: outputs = \$workspace/outputs
+      Root of the workspace (default: ./workspace). Durable runs are stored at
+      \$workspace/runs. Legacy \$workspace/outputs data is read-only and is not
+      auto-selected, migrated, evaluated, or cleaned.
 
 PREREQUISITES
   - Docker must be installed and running (used for --run, --run-all, and the
@@ -422,10 +576,13 @@ EXAMPLES
   $(basename "$0") --rebuild           # force fresh build of all bundles (latest pi CLI)
   $(basename "$0") --rebuild pi        # rebuild only the 'pi' agent bundle
   $(basename "$0") --run pi django__django-11039
-  $(basename "$0") --run pi django__django-11039 1800   # 30 min timeout
-  $(basename "$0") --run-all pi
-  $(basename "$0") --eval pi
-  $(basename "$0") --status pi
+  $(basename "$0") --run pi django__django-11039 1800 --profile baseline-local
+  $(basename "$0") --run-all pi --run-id verified-pi-pilot --timeout 1800
+  $(basename "$0") --run-all pi --resume --run-id verified-pi-pilot
+  $(basename "$0") --eval pi --run-id verified-pi-pilot
+  $(basename "$0") --status pi --run-id verified-pi-pilot
+  $(basename "$0") --cleanup-partial --agent pi --run-id verified-pi-pilot
+  $(basename "$0") --cleanup-partial --agent pi --run-id verified-pi-pilot --apply
   $(basename "$0") --interactive pi django__django-11039
 EOF
 }
@@ -597,90 +754,245 @@ DOCKER_RUN_FLAGS=(
     --add-host host.docker.internal:host-gateway
 )
 
-do_run() {
-    local agent="${1:?Usage: $0 --run <agent> <instance_id>}"
-    local instance_id="${2:?Usage: $0 --run <agent> <instance_id>}"
-    local timeout_sec="${3:-3600}"
+append_agent_runtime_env() {
+    local agent="$1"
+    local args_name="$2"
+    local -n args_ref="$args_name"
+    [ "$agent" = "codex" ] || return 0
 
+    local name
+    for name in \
+        SWE_CODEX_MODEL \
+        SWE_CODEX_BASE_URL \
+        SWE_CODEX_API_KEY \
+        SWE_CODEX_CONTEXT_WINDOW \
+        SWE_CODEX_AUTO_COMPACT_TOKEN_LIMIT; do
+        if [ -n "${!name:-}" ]; then
+            if [ "$name" = "SWE_CODEX_API_KEY" ]; then
+                # Let Docker copy the value from the host environment without
+                # placing the secret itself in this process's argument list.
+                args_ref+=(-e "$name")
+            else
+                args_ref+=(-e "${name}=${!name}")
+            fi
+        fi
+    done
+}
+
+new_run_id() {
+    local agent="$1"
+    printf 'run-%s-%s-%s\n' "$agent" "$(date -u +%Y%m%dT%H%M%S%NZ)" "$$"
+}
+
+dataset_fingerprint() {
+    local instances_file="$1"
+    if [ -s "$CACHE_FILE" ]; then
+        sha256sum "$CACHE_FILE" | awk '{print $1}'
+    else
+        sha256sum "$instances_file" | awk '{print $1}'
+    fi
+}
+
+create_run_manifest() {
+    local agent="$1" timeout_sec="$2" instances_file="$3"
+    local requested_run_id="${4:-}" profile="${5:-default}"
+    local run_id="${requested_run_id:-$(new_run_id "$agent")}"
+    local runner_commit dataset_sha
+    runner_commit=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
+    dataset_sha=$(dataset_fingerprint "$instances_file")
+    local dirty_args=()
+    if [ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]; then
+        dirty_args+=(--runner-dirty)
+    fi
+    python3 "$ARTIFACT_TOOL" create-run \
+        --runs-dir "$RUNS_DIR" \
+        --run-id "$run_id" \
+        --agent "$agent" \
+        --profile "$profile" \
+        --dataset-name "$HF_DATASET" \
+        --dataset-split test \
+        --dataset-sha256 "$dataset_sha" \
+        --runner-commit "$runner_commit" \
+        "${dirty_args[@]}" \
+        --timeout-seconds "$timeout_sec" \
+        --instances-file "$instances_file"
+}
+
+write_host_terminal_result() {
+    local attempt_dir="$1" status="$2" elapsed="$3" container_exit="$4"
+    ATTEMPT_DIR="$attempt_dir" TERMINAL_STATUS="$status" ELAPSED_SECONDS="$elapsed" \
+        CONTAINER_EXIT_CODE="$container_exit" python3 - <<'PY'
+import json
+import os
+import tempfile
+from pathlib import Path
+
+attempt = Path(os.environ["ATTEMPT_DIR"])
+patch = attempt / "patch.diff"
+if not patch.exists():
+    patch.write_bytes(b"")
+result = {
+    "schema_version": 1,
+    "status": os.environ["TERMINAL_STATUS"],
+    "patch_bytes": patch.stat().st_size,
+    "elapsed_seconds": int(os.environ["ELAPSED_SECONDS"]),
+    "container_exit_code": int(os.environ["CONTAINER_EXIT_CODE"]),
+    "checkpointed": False,
+    "partial_patch": False,
+    "finalization_reason": "host_start_failure",
+}
+target = attempt / "result.json"
+fd, name = tempfile.mkstemp(prefix=".result.", dir=attempt)
+try:
+    with os.fdopen(fd, "w") as handle:
+        json.dump(result, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(name, target)
+finally:
+    Path(name).unlink(missing_ok=True)
+PY
+}
+
+attempt_artifacts_valid() {
+    local attempt_dir="$1"
+    ATTEMPT_DIR="$attempt_dir" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+attempt = Path(os.environ["ATTEMPT_DIR"])
+result_path = attempt / "result.json"
+patch_path = attempt / "patch.diff"
+if result_path.is_symlink() or patch_path.is_symlink() or not patch_path.is_file():
+    raise SystemExit(1)
+try:
+    result = json.load(result_path.open())
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+if not isinstance(result, dict) or not isinstance(result.get("status"), str):
+    raise SystemExit(1)
+allowed = {
+    "patch_collected", "no_patch", "agent_error", "invalid_result",
+    "container_error", "timed_out", "operator_cancelled", "oom_killed",
+}
+if result["status"] not in allowed:
+    raise SystemExit(1)
+patch_bytes = result.get("patch_bytes")
+if isinstance(patch_bytes, bool) or not isinstance(patch_bytes, int):
+    raise SystemExit(1)
+if patch_bytes != patch_path.stat().st_size:
+    raise SystemExit(1)
+PY
+}
+
+do_run() {
+    local agent="${1:?Usage: $0 --run <agent> <instance_id> [TIMEOUT] [--run-id ID]}"
+    local instance_id="${2:?Usage: $0 --run <agent> <instance_id> [TIMEOUT] [--run-id ID]}"
+    shift 2
+    local timeout_sec="3600" requested_run_id="" profile="default" run_dir=""
+    if [ $# -gt 0 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
+        timeout_sec="$1"
+        shift
+    fi
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --timeout) timeout_sec="${2:?--timeout requires a number}"; shift 2 ;;
+            --run-id) requested_run_id="${2:?--run-id requires a value}"; shift 2 ;;
+            --profile) profile="${2:?--profile requires a value}"; shift 2 ;;
+            --run-dir) run_dir="${2:?--run-dir requires a value}"; shift 2 ;;
+            *) echo "Unknown option: $1"; return 2 ;;
+        esac
+    done
     if ! [[ "$timeout_sec" =~ ^[0-9]+$ ]]; then
         echo "ERROR: Timeout must be a non-negative integer, got '${timeout_sec}'."
         return 2
     fi
-
-    # Validate agent exists
     if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
-        echo "ERROR: Agent '${agent}' not found. Available agents:"
-        for d in "${AGENTS_DIR}"/*/; do
-            [ -d "$d" ] && echo "  $(basename "$d")"
-        done
+        echo "ERROR: Agent '${agent}' not found."
         return 1
     fi
-
-    # Validate agent bundle exists
     local bundle_dir="${AGENTS_DIR}/${agent}/bundle"
     if [ ! -d "$bundle_dir" ]; then
         echo "ERROR: Agent bundle not found at ${bundle_dir}. Run './run.sh --build ${agent}' first."
         return 1
     fi
+    ensure_docker || return 1
 
-    # Get instance data
-    local inst_data
-    inst_data=$(get_instance "$instance_id")
-    local repo_url base_commit problem_statement
-    repo_url=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['repo'])")
-    base_commit=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['base_commit'])")
-    problem_statement=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['problem_statement'])")
+    if [ -z "$run_dir" ]; then
+        local single_instance_file
+        single_instance_file=$(mktemp)
+        printf '%s\n' "$instance_id" > "$single_instance_file"
+        run_dir=$(create_run_manifest "$agent" "$timeout_sec" "$single_instance_file" \
+            "$requested_run_id" "$profile") || { rm -f "$single_instance_file"; return 1; }
+        rm -f "$single_instance_file"
+    else
+        local manifest_agent
+        manifest_agent=$(RUN_DIR="$run_dir" python3 -c \
+            'import json,os; print(json.load(open(os.path.join(os.environ["RUN_DIR"],"manifest.json")))["agent"])')
+        [ "$manifest_agent" = "$agent" ] || { echo "ERROR: Run belongs to ${manifest_agent}."; return 2; }
+    fi
+    echo "  Run: $(basename "$run_dir")"
 
-    # Determine swebench image for this instance
-    local image_name
+    local attempt_dir attempt_id
+    attempt_dir=$(python3 "$ARTIFACT_TOOL" begin-attempt \
+        --run-dir "$run_dir" --instance-id "$instance_id") || return
+    attempt_id=$(basename "$attempt_dir")
+    chmod 777 "$attempt_dir"
+
+    local inst_data repo_url base_commit problem_statement image_name
+    if ! inst_data=$(get_instance "$instance_id"); then
+        echo "ERROR: Could not load dataset record for ${instance_id}." >&2
+        return 1
+    fi
+    if ! repo_url=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['repo'])") || \
+            ! base_commit=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['base_commit'])") || \
+            ! problem_statement=$(echo "$inst_data" | python3 -c "import sys,json; print(json.load(sys.stdin)['problem_statement'])"); then
+        echo "ERROR: Dataset record is missing required fields for ${instance_id}." >&2
+        return 1
+    fi
     image_name=$(instance_to_image "$instance_id")
 
-    # Check storage before pulling
     if ! check_storage; then
         echo "Run './run.sh --cleanup' to free space, or set MAX_STORAGE_PCT"
         return 1
     fi
-
-    # Pull the image if not present (try cache first)
     if ! docker image inspect "$image_name" >/dev/null 2>&1; then
-        # Try loading from cache first
         if load_image_from_cache "$image_name"; then
             echo "  Loaded from cache: ${image_name}"
         else
             echo "Pulling swebench image: ${image_name}..."
-            docker pull "$image_name" 2>&1 | tail -3
-            # Save to cache for next time
+            if ! docker pull "$image_name" 2>&1 | tail -3; then
+                echo "ERROR: Failed to pull ${image_name}." >&2
+                return 1
+            fi
             save_image_to_cache "$image_name"
         fi
     fi
 
-    # Keep each agent's artifacts isolated so comparisons cannot overwrite or
-    # mislabel another agent's patch.
-    local agent_output_root="${OUTPUT_DIR}/${agent}"
-    local instance_output_dir="${agent_output_root}/${instance_id}"
-    mkdir -p "$instance_output_dir"
-    chmod 777 "$agent_output_root" "$instance_output_dir"
-
-    # Run the agent container
     echo "=============================================================================="
     echo "  [WORK] Running: ${agent} against ${instance_id}"
     echo "         Image: ${image_name}"
+    echo "         Attempt: ${attempt_id}"
     echo "=============================================================================="
 
-    local container_name="swe_${agent}_${instance_id}"
-    # Remove any stale container/network endpoint from a previous interrupted
-    # run. release_container also drops orphaned bridge endpoints (whose
-    # container is already gone) that would otherwise cause exit 125.
-    release_container "${container_name}"
-    local started_at docker_status elapsed
+    local container_key container_name
+    container_key=$(printf '%s' "$(basename "$run_dir")/${instance_id}/${attempt_id}" | \
+        sha256sum | cut -c1-12)
+    container_name="swe_${agent}_${instance_id}_${container_key}"
+    release_container "$container_name"
     local docker_command=(
-        docker run
+        docker run -d --init --stop-timeout 30
         --name "$container_name"
         "${DOCKER_RUN_FLAGS[@]}"
         -e "SWE_AGENT_NAME=${agent}"
         -e "SWE_OUTPUT_ROOT=/workspace/outputs/${agent}"
+    )
+    append_agent_runtime_env "$agent" docker_command
+    docker_command+=(
         -v "${bundle_dir}:/agent:ro"
-        -v "${agent_output_root}:/workspace/outputs"
+        -v "${attempt_dir}:/workspace/outputs/${agent}/${instance_id}"
         "$image_name"
         /agent/entrypoint.sh
         "$instance_id"
@@ -689,132 +1001,187 @@ do_run() {
         "$problem_statement"
     )
 
+    local started_at cid start_rc elapsed
     started_at=$(date +%s)
-    if [ "$timeout_sec" -gt 0 ]; then
-        if timeout --foreground --signal=TERM --kill-after=30s "${timeout_sec}s" \
-            "${docker_command[@]}"; then
-            docker_status=0
-        else
-            docker_status=$?
-        fi
-    elif "${docker_command[@]}"; then
-        docker_status=0
+    if cid=$("${docker_command[@]}"); then
+        start_rc=0
     else
-        docker_status=$?
+        start_rc=$?
     fi
+    if [ "$start_rc" -ne 0 ] || [ -z "$cid" ]; then
+        [ "$start_rc" -ne 0 ] || start_rc=1
+        elapsed=$(( $(date +%s) - started_at ))
+        write_host_terminal_result "$attempt_dir" "container_error" "$elapsed" "$start_rc"
+        python3 "$ARTIFACT_TOOL" finalize-attempt --run-dir "$run_dir" \
+            --instance-id "$instance_id" --attempt-id "$attempt_id" >/dev/null
+        echo "ERROR: Docker could not start ${agent}/${instance_id} (exit ${start_rc})."
+        return "$start_rc"
+    fi
+
+    ACTIVE_CONTAINER="$container_name"
+    ACTIVE_ATTEMPT_DIR="$attempt_dir"
+    INTERRUPT_REQUESTED=0
+    docker logs -f "$cid" &
+    local logs_pid=$!
+    local wait_file="${attempt_dir}/container-wait.txt"
+    if [ "$timeout_sec" -gt 0 ]; then
+        timeout --signal=TERM --kill-after=5 "${timeout_sec}s" docker wait "$cid" > "$wait_file" &
+    else
+        docker wait "$cid" > "$wait_file" &
+    fi
+    local monitor_pid=$! monitor_rc
+    if wait "$monitor_pid"; then
+        monitor_rc=0
+    else
+        monitor_rc=$?
+    fi
+
+    local stop_requested=0
+    if [ "$monitor_rc" -eq 124 ]; then
+        stop_requested=1
+        write_termination_request "timed_out" "hard_timeout" "$timeout_sec" || true
+        docker stop --signal=TERM --time 30 "$cid" >/dev/null 2>&1 || true
+    elif [ "$INTERRUPT_REQUESTED" -eq 1 ]; then
+        stop_requested=1
+        docker stop --signal=TERM --time 30 "$cid" >/dev/null 2>&1 || true
+    elif [ "$monitor_rc" -ne 0 ]; then
+        stop_requested=1
+        echo "  WARNING: docker wait monitor exited with ${monitor_rc}; stopping the active container."
+        write_termination_request "container_error" "wait_monitor_error" "$timeout_sec" || true
+        docker stop --signal=TERM --time 30 "$cid" >/dev/null 2>&1 || true
+    fi
+    if [ "$stop_requested" -eq 1 ] && \
+            ! timeout --signal=TERM --kill-after=5 40s docker wait "$cid" >/dev/null 2>&1; then
+        echo "  WARNING: Graceful stop did not complete; force-killing ${container_name}." >&2
+        docker kill "$cid" >/dev/null 2>&1 || true
+        timeout --signal=TERM --kill-after=2 10s docker wait "$cid" >/dev/null 2>&1 || true
+    fi
+    wait "$logs_pid" 2>/dev/null || true
     elapsed=$(( $(date +%s) - started_at ))
 
-    if [ "$docker_status" -eq 124 ]; then
-        docker rm -f "$container_name" >/dev/null 2>&1 || true
-        record_host_result "${instance_output_dir}/result.json" "timed_out" \
-            "$docker_status" "$elapsed"
-        echo "ERROR: ${agent}/${instance_id} timed out after ${timeout_sec}s."
-        return $docker_status
-    fi
-
-    if [ "$docker_status" -ne 0 ]; then
-        docker rm -f "$container_name" >/dev/null 2>&1 || true
-        record_host_result "${instance_output_dir}/result.json" "container_error" \
-            "$docker_status" "$elapsed"
-        echo "ERROR: ${agent}/${instance_id} container exited with ${docker_status}."
-        return $docker_status
-    fi
-
-    # Copy outputs out before removing the container.
-    # Check docker inspect to distinguish violent deaths from clean exits.
-    local container_state=""
-    if ! container_state=$(docker inspect --format '{{.State.Status}}' "$container_name" 2>/dev/null); then
-        echo "  WARNING: Cannot inspect container state, attempting copy anyway."
-    fi
-
-    mkdir -p "$instance_output_dir"
-    local cp_ok=0
-    local cp_tmp
-    cp_tmp=$(mktemp -d)
-    if docker cp "${container_name}:/workspace/outputs/${agent}/${instance_id}" \
-                 "${cp_tmp}/"; then
-        # Flatten: docker cp nests the instance dir; move its contents into place.
-        if [ -d "${cp_tmp}/${instance_id}" ]; then
-            mv "${cp_tmp}/${instance_id}/"* "${instance_output_dir}/" 2>/dev/null || true
-        fi
-        # Verify that the copy actually produced output files.
-        if [ -f "${instance_output_dir}/result.json" ] || [ -f "${instance_output_dir}/patch.diff" ]; then
-            echo "  Copied outputs from container."
-            cp_ok=1
-        else
-            echo "  WARNING: Copy succeeded but no output files found in container."
-        fi
+    local state_file="${attempt_dir}/container-state.json" state_tmp inspect_ok=0
+    state_tmp=$(mktemp "${attempt_dir}/.container-state.XXXXXX")
+    if docker inspect --format '{{json .State}}' "$cid" > "$state_tmp" 2>/dev/null; then
+        mv "$state_tmp" "$state_file"
+        inspect_ok=1
     else
-        echo "  WARNING: Failed to copy outputs from container (state=$container_state)."
-        case "$container_state" in
-            dead|error)
-                echo "  Container died violently — leaving it for inspection."
-                ;;
-            *)
-                echo "  Leaving container for manual inspection: ${container_name}"
-                ;;
-        esac
-    fi
-    rm -rf "${cp_tmp}"
-
-    # Only remove the container once we have the outputs.
-    if [ "$cp_ok" -eq 1 ]; then
-        docker rm -f "$container_name" >/dev/null 2>&1 || true
+        rm -f "$state_tmp"
+        echo "  WARNING: Container state could not be captured; retaining ${container_name}."
     fi
 
-    # Fix ownership — files written by root in the container need to be owned by us.
-    if [ "$cp_ok" -eq 1 ]; then
-        chown -R "$(id -u):$(id -g)" "${instance_output_dir}" 2>/dev/null || true
+    local container_exit=-1 oom_killed=0
+    if [ "$inspect_ok" -eq 1 ]; then
+        local state_values
+        if state_values=$(STATE_FILE="$state_file" python3 -c \
+            'import json,os; s=json.load(open(os.environ["STATE_FILE"])); print(s.get("ExitCode",-1), int(bool(s.get("OOMKilled",False))))' \
+            2>/dev/null); then
+            read -r container_exit oom_killed <<< "$state_values"
+        else
+            inspect_ok=0
+            echo "  WARNING: Container State JSON is invalid; retaining ${container_name}."
+        fi
     fi
 
-    # If we couldn't copy outputs, treat as failure.
-    if [ "$cp_ok" -eq 0 ]; then
+    chown -R "$(id -u):$(id -g)" "$attempt_dir" 2>/dev/null || true
+    local artifacts_valid=0
+    if attempt_artifacts_valid "$attempt_dir"; then
+        artifacts_valid=1
+    fi
+    if [ "$artifacts_valid" -ne 1 ]; then
+        record_host_observation "${attempt_dir}/host-observation.json" "invalid_result" \
+            "$elapsed" "$monitor_rc" "$container_name"
+        ACTIVE_CONTAINER=""
+        ACTIVE_ATTEMPT_DIR=""
+        echo "ERROR: Attempt artifacts are incomplete; retained stopped container ${container_name}."
         return 1
     fi
 
-    # Check result.json for failure statuses — do_run_all relies on this return code.
+    local status_override="" retained_container=""
+    if [ "$oom_killed" -eq 1 ]; then
+        status_override="oom_killed"
+    elif [ "$monitor_rc" -eq 124 ]; then
+        status_override="timed_out"
+    elif [ "$INTERRUPT_REQUESTED" -eq 1 ]; then
+        status_override="operator_cancelled"
+    elif [ "$monitor_rc" -ne 0 ]; then
+        status_override="container_error"
+    elif [ "$container_exit" -ne 0 ]; then
+        local entrypoint_status
+        entrypoint_status=$(RESULT_FILE="${attempt_dir}/result.json" python3 -c \
+            'import json,os; print(json.load(open(os.environ["RESULT_FILE"])).get("status","invalid_result"))')
+        case "$entrypoint_status" in
+            agent_error|invalid_result|timed_out|operator_cancelled) ;;
+            *) status_override="container_error" ;;
+        esac
+    fi
+    [ "$inspect_ok" -eq 1 ] || retained_container="$container_name"
+    if ! record_host_result "${attempt_dir}/result.json" "$status_override" "$container_exit" \
+        "$elapsed" "$monitor_rc" "$timeout_sec" "$state_file" 1 "$retained_container"; then
+        ACTIVE_CONTAINER=""
+        ACTIVE_ATTEMPT_DIR=""
+        echo "ERROR: Host result finalization failed; retained ${container_name}." >&2
+        return 1
+    fi
+
+    if ! python3 "$ARTIFACT_TOOL" finalize-attempt --run-dir "$run_dir" \
+        --instance-id "$instance_id" --attempt-id "$attempt_id" >/dev/null; then
+        ACTIVE_CONTAINER=""
+        ACTIVE_ATTEMPT_DIR=""
+        echo "ERROR: Attempt manifest finalization failed; retained ${container_name}." >&2
+        return 1
+    fi
+    if [ "$inspect_ok" -eq 1 ]; then
+        docker rm "$cid" >/dev/null 2>&1 || \
+            echo "  WARNING: Could not remove stopped container ${container_name}."
+    fi
+    ACTIVE_CONTAINER=""
+    ACTIVE_ATTEMPT_DIR=""
+
     local final_status
-    final_status=$(RESULT_FILE="${instance_output_dir}/result.json" python3 -c \
-        "import json, os; print(json.load(open(os.environ['RESULT_FILE'])).get('status', 'unknown'))" \
-        2>/dev/null || echo "unknown")
+    final_status=$(RESULT_FILE="${attempt_dir}/result.json" python3 -c \
+        'import json,os; print(json.load(open(os.environ["RESULT_FILE"])).get("status","unknown"))')
+    echo "  Result: ${final_status}; artifacts: ${attempt_dir}"
     case "$final_status" in
-        agent_error|container_error|timed_out|invalid_result)
-            return 1
-            ;;
+        patch_collected|no_patch|resolved) return 0 ;;
+        timed_out) return 124 ;;
+        operator_cancelled) return 130 ;;
+        *) return 1 ;;
     esac
-    return 0
 }
 
 # ==============================================================================
 # WORK-ALL — run agent against all instances
 #
-# Usage: ./run.sh --run-all <agent> [--timeout <seconds>] [--resume]
-#   --timeout N  Kill containers that exceed N seconds (default: 3600 = 1 hour)
-#   --resume     Skip instances that already have a result.json
+# Usage: ./run.sh --run-all <agent> [--timeout <seconds>] [--resume] [--run-id ID]
+#   --timeout N  Request a checkpoint at N seconds (default: 3600 = 1 hour)
+#   --resume     Continue the named/latest manifest, running only untouched tasks
 # ==============================================================================
 do_run_all() {
     local agent="${1:?Usage: $0 --run-all <agent> [--timeout N] [--resume]}"
     shift
 
-    local timeout_sec="3600" resume=0
+    local timeout_sec="3600" timeout_set=0 resume=0 requested_run_id=""
+    local profile="default" profile_set=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --timeout) timeout_sec="${2:?--timeout requires a number}"; shift 2 ;;
+            --timeout) timeout_sec="${2:?--timeout requires a number}"; timeout_set=1; shift 2 ;;
             --resume)  resume=1; shift ;;
-            *)         echo "Unknown option: $1"; return 1 ;;
+            --run-id) requested_run_id="${2:?--run-id requires a value}"; shift 2 ;;
+            --profile) profile="${2:?--profile requires a value}"; profile_set=1; shift 2 ;;
+            *)         echo "Unknown option: $1"; return 2 ;;
         esac
     done
-
-    # Validate agent exists
+    if ! [[ "$timeout_sec" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: Timeout must be a non-negative integer, got '${timeout_sec}'."
+        return 2
+    fi
     if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
         echo "ERROR: Agent '${agent}' not found."
         return 1
     fi
+    ensure_docker || return 1
 
     local count=0 skipped=0 failed=0
-    local agent_output_root="${OUTPUT_DIR}/${agent}"
-    set +e  # Don't exit on errors — we handle them per-instance
-    # Get all instance IDs to temp file
     local inst_file
     inst_file=$(mktemp)
     if ! fetch_dataset | python3 -c "
@@ -827,65 +1194,81 @@ for inst in data:
         rm -f "$inst_file"
         return 1
     fi
-    # Get all instance IDs
+
+    local run_dir
+    if [ "$resume" -eq 1 ]; then
+        run_dir=$(resolve_run_dir "$agent" "$requested_run_id") || { rm -f "$inst_file"; return 1; }
+        local resume_values manifest_timeout manifest_profile manifest_dataset_sha current_dataset_sha
+        resume_values=$(RUN_DIR="$run_dir" INSTANCES_FILE="$inst_file" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+manifest = json.load(open(Path(os.environ["RUN_DIR"]) / "manifest.json"))
+current = [line.strip() for line in Path(os.environ["INSTANCES_FILE"]).read_text().splitlines() if line.strip()]
+if manifest["dataset"]["instance_ids"] != current:
+    raise SystemExit("instance ordering mismatch")
+print(manifest["config"]["timeout_seconds"], manifest["profile"], manifest["dataset"]["cache_sha256"])
+PY
+        ) || {
+            echo "ERROR: The current dataset ordering does not match the run manifest; refusing resume." >&2
+            rm -f "$inst_file"
+            return 2
+        }
+        read -r manifest_timeout manifest_profile manifest_dataset_sha <<< "$resume_values"
+        current_dataset_sha=$(dataset_fingerprint "$inst_file")
+        if [ "$current_dataset_sha" != "$manifest_dataset_sha" ]; then
+            echo "ERROR: The dataset fingerprint changed; refusing resume." >&2
+            rm -f "$inst_file"
+            return 2
+        fi
+        if [ "$timeout_set" -eq 1 ] && [ "$timeout_sec" != "$manifest_timeout" ]; then
+            echo "ERROR: --timeout differs from the immutable run manifest (${manifest_timeout})." >&2
+            rm -f "$inst_file"
+            return 2
+        fi
+        if [ "$profile_set" -eq 1 ] && [ "$profile" != "$manifest_profile" ]; then
+            echo "ERROR: --profile differs from the immutable run manifest (${manifest_profile})." >&2
+            rm -f "$inst_file"
+            return 2
+        fi
+        timeout_sec="$manifest_timeout"
+        profile="$manifest_profile"
+    else
+        run_dir=$(create_run_manifest "$agent" "$timeout_sec" "$inst_file" \
+            "$requested_run_id" "$profile") || { rm -f "$inst_file"; return 1; }
+    fi
+    echo "=== Run: $(basename "$run_dir") ==="
+
     while read -r instance_id; do
         echo "=============================================================================="
         echo "  [WORK] Processing: ${instance_id}"
         echo "=============================================================================="
-        # Wait for any running swe containers to finish
-        local wait_count=0
-        while docker ps --format "{{.Names}}" | grep -q "swe_${agent}_"; do
-            if [ $wait_count -gt 0 ] && [ $((wait_count % 6)) -eq 0 ]; then
-                echo "  Waiting for container to finish... (${wait_count}s)"
-            fi
-            sleep 1
-            wait_count=$((wait_count + 1))
-            if [ $wait_count -gt 3600 ]; then
-                echo "  ERROR: Timeout waiting for container, killing all swe containers"
-                docker ps --format "{{.Names}}" | grep "swe_${agent}_" | while read -r c; do release_container "$c"; done 2>/dev/null || true
-                break
-            fi
-        done
-        # Double check — release any remaining containers/endpoints from previous runs
-        docker ps --format "{{.Names}}" | grep "swe_${agent}_" | while read -r c; do release_container "$c"; done 2>/dev/null || true
-        # Resume: skip instances that already have a result.json
-        if [ "$resume" = 1 ] && [ -f "${agent_output_root}/${instance_id}/result.json" ]; then
+        local task_state
+        task_state=$(python3 "$ARTIFACT_TOOL" task-state \
+            --run-dir "$run_dir" --instance-id "$instance_id") || { failed=$((failed + 1)); continue; }
+        if [ "$resume" -eq 1 ] && [ "$task_state" != "pending" ]; then
+            echo "  Skipping manifest task with existing attempt state: ${task_state}"
             skipped=$((skipped + 1))
             continue
         fi
         count=$((count + 1))
-        # Determine swebench image for this instance
-        local image_name
-        image_name=$(instance_to_image "$instance_id")
-
-        # Check storage before pulling
-        if ! check_storage; then
-            echo "Run './run.sh --cleanup' to free space, or set MAX_STORAGE_PCT"
-            break
-        fi
-
-        # Pull the image if not present (try cache first)
-        if ! docker image inspect "$image_name" >/dev/null 2>&1; then
-            # Try loading from cache first
-            if load_image_from_cache "$image_name"; then
-                echo "  Loaded from cache: ${image_name}"
-            else
-                echo "Pulling swebench image: ${image_name}..."
-                docker pull "$image_name" 2>&1 | tail -3
-                # Save to cache for next time
-                save_image_to_cache "$image_name"
-            fi
-        fi
-
-        # Run instance (do_run handles output dir creation)
-        if ! do_run "$agent" "$instance_id" "$timeout_sec"; then
+        local run_rc=0
+        if do_run "$agent" "$instance_id" --timeout "$timeout_sec" --run-dir "$run_dir"; then
+            run_rc=0
+        else
+            run_rc=$?
             failed=$((failed + 1))
+        fi
+        if [ "$run_rc" -eq 130 ]; then
+            echo "  Operator cancellation stops the queue; untouched tasks remain resumable."
+            break
         fi
     done < "$inst_file"
     rm -f "$inst_file"
-    set -e  # Restore error handling
     echo ""
     echo "Done: ${count} run, ${skipped} skipped (resume), ${failed} failed"
+    echo "Run artifacts: ${run_dir}"
     [ "$failed" -eq 0 ]
 }
 
@@ -893,12 +1276,17 @@ for inst in data:
 # EVAL — use official swebench harness
 # ==============================================================================
 do_eval() {
-    local agent="${1:?Usage: $0 --eval <agent>}"
+    local agent="${1:?Usage: $0 --eval <agent> [--run-id ID]}"
+    shift
+    local requested_run_id=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --run-id) requested_run_id="${2:?--run-id requires a value}"; shift 2 ;;
+            *) echo "Unknown option: $1"; return 2 ;;
+        esac
+    done
     if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
-        echo "ERROR: Agent '${agent}' not found. Available agents:"
-        for d in "${AGENTS_DIR}"/*/; do
-            [ -d "$d" ] && echo "  $(basename "$d")"
-        done
+        echo "ERROR: Agent '${agent}' not found."
         return 1
     fi
 
@@ -908,47 +1296,31 @@ do_eval() {
         return 1
     fi
 
-    local eval_dir="${OUTPUT_DIR}/${agent}"
-    [ -d "$eval_dir" ] || { echo "No outputs found. Run instances first (--run or --run-all)."; return; }
+    local run_dir
+    run_dir=$(resolve_run_dir "$agent" "$requested_run_id") || return
+    local evaluation_id="eval-$(date -u +%Y%m%dT%H%M%S%NZ)-$$"
+    local eval_dir="${run_dir}/reports/evaluations/${evaluation_id}"
+    mkdir -p "$eval_dir"
 
-    # Collect instance IDs that have non-empty patches
+    # The manifest selection snapshot is the sole evaluation input. The helper
+    # verifies each finalized patch digest before writing predictions.
     local instance_ids=()
-    for d in "${eval_dir}"/*/; do
-        [ -d "$d" ] && [ -s "${d}patch.diff" ] && instance_ids+=("$(basename "$d")")
-    done
-    [ ${#instance_ids[@]} -eq 0 ] && { echo "No patches found to evaluate. Run instances first."; return; }
 
-    # Build predictions file in swebench format (JSONL)
     local preds="${eval_dir}/predictions.jsonl"
-    EVAL_DIR="${eval_dir}" AGENT_NAME="${agent}" PREDS="${preds}" "${SWEBENCH_PY}" -c "
-import sys, json, os
-results = []
-for instance_id in sys.argv[1:]:
-    patch_path = os.path.join(os.environ['EVAL_DIR'], instance_id, 'patch.diff')
-    if not os.path.exists(patch_path):
-        continue
-    with open(patch_path) as f:
-        patch = f.read()
-    results.append({
-        'instance_id': instance_id,
-        'model_name_or_path': os.environ['AGENT_NAME'],
-        'model_patch': patch
-    })
-with open(os.environ['PREDS'], 'w') as f:
-    for result in results:
-        f.write(json.dumps(result) + '\\n')
-print(f'Wrote {len(results)} predictions to {os.environ[\"PREDS\"]}')
-" "${instance_ids[@]}"
+    local selection_file="${eval_dir}/selected-attempts.json"
+    local prediction_count
+    prediction_count=$(python3 "$ARTIFACT_TOOL" build-predictions \
+        --run-dir "$run_dir" --output "$preds" --selection-output "$selection_file") || return
+    mapfile -t instance_ids < <(PREDS="$preds" python3 -c \
+        'import json,os; [print(json.loads(line)["instance_id"]) for line in open(os.environ["PREDS"])]')
 
     echo "=============================================================================="
-    echo "  [EVAL] Running swebench harness on ${#instance_ids[@]} patch(es) for '${agent}'"
+    echo "  [EVAL] Run $(basename "$run_dir"): ${prediction_count} selected patch(es)"
     echo "=============================================================================="
 
-    # Run the official swebench harness from the selected agent's output tree.
-    # This keeps its aggregate reports from being confused with another agent.
-    local report_dir="${eval_dir}/eval"
+    local report_dir="${eval_dir}/harness"
     mkdir -p "$report_dir"
-    (
+    if ! (
         cd "$eval_dir"
         "${SWEBENCH_PY}" -m swebench.harness.run_evaluation \
             --dataset_name "${HF_DATASET}" \
@@ -957,55 +1329,42 @@ print(f'Wrote {len(results)} predictions to {os.environ[\"PREDS\"]}')
             --max_workers 1 \
             --cache_level instance \
             --report_dir "${report_dir}" \
-            --run_id "${agent}" \
+            --run_id "${evaluation_id}" \
             -i "${instance_ids[@]}"
-    )
+    ); then
+        echo "ERROR: The official SWE-bench evaluator failed for ${evaluation_id}." >&2
+        return 1
+    fi
 
-    # Fold harness results back into each result.json
-    echo "Folding harness results into result.json..."
-    EVAL_DIR="${eval_dir}" AGENT_NAME="${agent}" "${SWEBENCH_PY}" -c "
-import json, os, glob
-report_dir = os.environ['EVAL_DIR']
-agent = os.environ['AGENT_NAME']
-# swebench versions have used both separators; prefer the exact agent/run id,
-# then fall back to the newest aggregate report inside this agent directory.
-cands = [
-    os.path.join(report_dir, f'{agent}.{agent}.json'),
-    os.path.join(report_dir, f'{agent}__{agent}.json'),
-]
-cands.extend(sorted(glob.glob(os.path.join(report_dir, '*.json')), key=os.path.getmtime, reverse=True))
-rep = None
-for c in cands:
+    # Evaluation is an overlay. Finalized attempts remain immutable.
+    local official_report
+    official_report=$(EVAL_DIR="$eval_dir" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+root = Path(os.environ["EVAL_DIR"])
+matches = []
+for path in root.rglob("*.json"):
+    if path.name in {"selected-attempts.json", "evaluation.json"}:
+        continue
     try:
-        d = json.load(open(c))
-        if 'resolved_ids' in d and 'unresolved_ids' in d:
-            rep = d; break
-    except Exception:
-        pass
-if not rep:
-    print('WARNING: swebench report not found, skipping fold')
-    exit(0)
-resolved = set(rep.get('resolved_ids', []))
-errored  = set(rep.get('error_ids', []))
-folded = 0
-for iid in set(resolved) | set(rep.get('unresolved_ids', [])) | errored:
-    rf = os.path.join(report_dir, iid, 'result.json')
-    if not os.path.exists(rf): continue
-    try:
-        try:
-            meta = json.load(open(rf))
-        except Exception:
-            meta = {'status': 'patch_collected'}
-        if iid in resolved:   meta['local_eval'] = 'resolved'; meta['status'] = 'resolved'
-        elif iid in errored:  meta['local_eval'] = 'error';    meta['status'] = 'error'
-        else:                 meta['local_eval'] = 'failed';    meta['status'] = 'failed'
-        with open(rf, 'w') as handle:
-            json.dump(meta, handle, indent=2)
-        folded += 1
-    except PermissionError:
-        print(f'WARNING: Cannot write {rf}, skipping')
-print(f'Folded results for {folded} instances ({len(resolved) + len(errored)} total)')
-"
+        data = json.load(path.open())
+    except (OSError, json.JSONDecodeError):
+        continue
+    if isinstance(data, dict) and "resolved_ids" in data and "unresolved_ids" in data:
+        matches.append(path)
+if not matches:
+    raise SystemExit("official swebench aggregate report was not found")
+print(max(matches, key=lambda item: item.stat().st_mtime_ns))
+PY
+    ) || return 1
+    python3 "$ARTIFACT_TOOL" record-evaluation \
+        --run-dir "$run_dir" \
+        --evaluation-id "$evaluation_id" \
+        --report-file "$official_report" \
+        --selection-file "$selection_file" >/dev/null || return
+    echo "Evaluation overlay: ${eval_dir}/evaluation.json"
 }
 
 # ==============================================================================
@@ -1013,66 +1372,64 @@ print(f'Folded results for {folded} instances ({len(resolved) + len(errored)} to
 # ==============================================================================
 summarize_agent() {
     local agent="$1"
-    local eval_dir="${OUTPUT_DIR}/${agent}"
-    [ -d "$eval_dir" ] || { echo "No outputs found for agent '${agent}'."; return; }
-    local out_json="${eval_dir}/summary.json"
-    AGENT="${agent}" EVAL_DIR="${eval_dir}" OUT_JSON="${out_json}" python3 - <<'PY'
-import json, os, glob
-agent=os.environ['AGENT']
-eval_dir=os.environ['EVAL_DIR']; out_json=os.environ['OUT_JSON']
-rows=[]
-for d in sorted(glob.glob(os.path.join(eval_dir,'*',''))):
-    iid=os.path.basename(d.rstrip('/'))
-    if not iid: continue
-    rp=os.path.join(d,'result.json')
-    if not os.path.exists(rp): continue
-    try:
-        meta=json.load(open(rp))
-    except (json.JSONDecodeError, ValueError):
-        continue
-    rows.append({
-      'instance_id': iid,
-      'status': meta.get('status'),
-      'patch_bytes': meta.get('patch_bytes'),
-      'elapsed_seconds': meta.get('elapsed_seconds'),
-      'local_eval': meta.get('local_eval'),
-    })
-total=len(rows)
-resolved=sum(1 for r in rows if r['local_eval']=='resolved')
-failed=sum(1 for r in rows if r['local_eval']=='failed')
-errored=sum(1 for r in rows if r['local_eval']=='error')
-no_patch=sum(1 for r in rows if r['status']=='no_patch')
-timed_out=sum(1 for r in rows if r['status']=='timed_out')
-agent_errors=sum(1 for r in rows if r['status'] in ('agent_error','container_error'))
-summary={'agent':agent,'total':total, 'resolved':resolved,'failed':failed,
-         'errored':errored,'no_patch':no_patch,'timed_out':timed_out,
-         'agent_errors':agent_errors,'rows':rows}
-json.dump(summary, open(out_json,'w'), indent=2)
-print(f"Agent: {agent}")
-print(f"{'instance_id':42s} {'status':12s} {'local_eval':12s} {'patch_B':>8s} {'elapsed_s':>10s}")
-for r in rows:
-    print(f"{r['instance_id']:42s} {str(r['status']):12s} {str(r['local_eval']):12s} {str(r['patch_bytes'] or 0):>8s} {str(r['elapsed_seconds'] or 0):>10s}")
-print(f"\nTotal: {total} | resolved: {resolved} | failed: {failed} | error: {errored} | no_patch: {no_patch} | timed_out: {timed_out} | agent_error: {agent_errors}")
-print(f"Summary written to {out_json}")
+    local requested_run_id="${2:-}"
+    local run_dir
+    run_dir=$(resolve_run_dir "$agent" "$requested_run_id") || return
+    local out_json="${run_dir}/reports/summary.json"
+    python3 "$ARTIFACT_TOOL" summary --run-dir "$run_dir" --output "$out_json" >/dev/null || return
+    SUMMARY_FILE="$out_json" python3 - <<'PY' || return
+import json
+import os
+
+summary = json.load(open(os.environ["SUMMARY_FILE"]))
+rows = summary["rows"]
+print(f"Run: {summary['run_id']} | Agent: {summary['agent']} | Profile: {summary['profile']}")
+print(f"{'instance_id':42s} {'status':20s} {'selected':14s} {'local_eval':12s} {'patch_B':>8s}")
+for row in rows:
+    print(
+        f"{row['instance_id']:42s} {str(row['status']):20s} "
+        f"{str(row['selected_attempt']):14s} {str(row['local_eval']):12s} "
+        f"{str(row['patch_bytes'] or 0):>8s}"
+    )
+print(
+    f"\nPlanned: {summary['planned']} | attempted: {summary['attempted']} | "
+    f"selected: {summary['selected']} | resolved: {summary['resolved']} | "
+    f"failed: {summary['failed']} | error: {summary['errored']} | "
+    f"timed_out: {summary['timed_out']}"
+)
+print(f"Summary written to {os.environ['SUMMARY_FILE']}")
 PY
 }
 
 do_summarize() {
-    local requested_agent="${1:-}"
+    local requested_agent="" requested_run_id=""
+    if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+        requested_agent="$1"
+        shift
+    fi
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --run-id) requested_run_id="${2:?--run-id requires a value}"; shift 2 ;;
+            *) echo "Unknown option: $1"; return 2 ;;
+        esac
+    done
     if [ -n "$requested_agent" ]; then
-        summarize_agent "$requested_agent"
+        summarize_agent "$requested_agent" "$requested_run_id"
         return
     fi
-
-    [ -d "$OUTPUT_DIR" ] || { echo "No outputs found."; return; }
-    local found=0 agent_dir
-    for agent_dir in "${OUTPUT_DIR}"/*/; do
-        [ -d "$agent_dir" ] || continue
+    if [ -n "$requested_run_id" ]; then
+        echo "ERROR: --run-id requires an explicit agent." >&2
+        return 2
+    fi
+    [ -d "${RUNS_DIR}/latest" ] || { echo "No manifest-backed runs found."; return; }
+    local found=0 pointer
+    for pointer in "${RUNS_DIR}/latest"/*; do
+        [ -f "$pointer" ] && [ ! -L "$pointer" ] || continue
         found=1
-        summarize_agent "$(basename "$agent_dir")"
+        summarize_agent "$(basename "$pointer")"
         echo ""
     done
-    [ "$found" -eq 1 ] || echo "No agent outputs found."
+    [ "$found" -eq 1 ] || echo "No manifest-backed runs found."
 }
 
 # ==============================================================================
@@ -1080,68 +1437,73 @@ do_summarize() {
 # ==============================================================================
 show_agent_status() {
     local agent="$1"
-    local agent_output_dir="${OUTPUT_DIR}/${agent}"
-    local total=0 resolved=0 failed=0 no_patch=0 timed_out=0 errors=0 unknown=0
-
-    echo "Agent: ${agent}"
-    if [ ! -d "$agent_output_dir" ]; then
-        echo "  No outputs found."
-        return
+    local requested_run_id="${2:-}" run_dir summary_tmp
+    run_dir=$(resolve_run_dir "$agent" "$requested_run_id") || return
+    summary_tmp=$(mktemp)
+    if ! python3 "$ARTIFACT_TOOL" summary --run-dir "$run_dir" > "$summary_tmp"; then
+        rm -f "$summary_tmp"
+        return 1
     fi
+    STATUS_SUMMARY_FILE="$summary_tmp" python3 - <<'PY' || { rm -f "$summary_tmp"; return 1; }
+import json
+import os
 
-    local instance_dir instance_id status
-    for instance_dir in "${agent_output_dir}"/*/; do
-        [ -d "$instance_dir" ] || continue
-        instance_id=$(basename "$instance_dir")
-        case "$instance_id" in
-            eval|logs) continue ;;
-        esac
-        total=$((total + 1))
-
-        if [ -f "${instance_dir}result.json" ]; then
-            status=$(INSTANCE_DIR="${instance_dir}" python3 -c "import json, os; print(json.load(open(os.environ['INSTANCE_DIR'] + 'result.json'))['status'])" 2>/dev/null || echo "unknown")
-            case "$status" in
-                resolved) resolved=$((resolved + 1)); echo -e "\033[32m✓\033[0m $instance_id ($status)" ;;
-                failed)   failed=$((failed + 1));   echo -e "\033[31m✗\033[0m $instance_id ($status)" ;;
-                no_patch) no_patch=$((no_patch + 1)); echo -e "\033[33m—\033[0m $instance_id (no patch)" ;;
-                timed_out) timed_out=$((timed_out + 1)); echo -e "\033[33m⌛\033[0m $instance_id (timed out)" ;;
-                error|agent_error|container_error) errors=$((errors + 1)); echo -e "\033[31m!\033[0m $instance_id ($status)" ;;
-                *)        unknown=$((unknown + 1));   echo -e "\033[90m?\033[0m $instance_id ($status)" ;;
-            esac
-        else
-            unknown=$((unknown + 1))
-            echo -e "\033[90m?\033[0m $instance_id (no result)"
-        fi
-    done
-
-    echo ""
-    echo "Total: $total | Resolved: $resolved | Failed: $failed | No patch: $no_patch | Timed out: $timed_out | Errors: $errors | Unknown: $unknown"
+summary = json.load(open(os.environ["STATUS_SUMMARY_FILE"]))
+print(f"Run: {summary['run_id']} | Agent: {summary['agent']} | Profile: {summary['profile']}")
+for row in summary["rows"]:
+    status = row["local_eval"] or row["status"]
+    marker = {
+        "resolved": "✓",
+        "failed": "✗",
+        "error": "!",
+        "timed_out": "⌛",
+        "no_patch": "—",
+        "pending": "·",
+    }.get(status, "?")
+    print(f"{marker} {row['instance_id']} ({status}; attempts={row['attempts']})")
+print(
+    f"\nPlanned: {summary['planned']} | Attempted: {summary['attempted']} | "
+    f"Selected: {summary['selected']} | Resolved: {summary['resolved']} | "
+    f"Failed: {summary['failed']} | Errors: {summary['errored']} | "
+    f"Timed out: {summary['timed_out']}"
+)
+PY
+    rm -f "$summary_tmp"
 }
 
 do_status() {
-    local requested_agent="${1:-}"
+    local requested_agent="" requested_run_id=""
+    if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+        requested_agent="$1"
+        shift
+    fi
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --run-id) requested_run_id="${2:?--run-id requires a value}"; shift 2 ;;
+            *) echo "Unknown option: $1"; return 2 ;;
+        esac
+    done
     echo "=== SWE-bench Harness Status ==="
-    echo "Output directory: ${OUTPUT_DIR}"
+    echo "Runs directory: ${RUNS_DIR}"
     echo ""
 
     if [ -n "$requested_agent" ]; then
-        show_agent_status "$requested_agent"
+        show_agent_status "$requested_agent" "$requested_run_id"
         return
     fi
-
-    if [ ! -d "$OUTPUT_DIR" ]; then
-        echo "No outputs found. Run instances first."
-        return
+    if [ -n "$requested_run_id" ]; then
+        echo "ERROR: --run-id requires an explicit agent." >&2
+        return 2
     fi
-
-    local found=0 agent_dir
-    for agent_dir in "${OUTPUT_DIR}"/*/; do
-        [ -d "$agent_dir" ] || continue
+    [ -d "${RUNS_DIR}/latest" ] || { echo "No manifest-backed runs found."; return; }
+    local found=0 pointer
+    for pointer in "${RUNS_DIR}/latest"/*; do
+        [ -f "$pointer" ] && [ ! -L "$pointer" ] || continue
         found=1
-        show_agent_status "$(basename "$agent_dir")"
+        show_agent_status "$(basename "$pointer")"
         echo ""
     done
-    [ "$found" -eq 1 ] || echo "No agent outputs found."
+    [ "$found" -eq 1 ] || echo "No manifest-backed runs found."
 }
 
 # ==============================================================================
@@ -1199,6 +1561,9 @@ do_interactive() {
         "${DOCKER_RUN_FLAGS[@]}"
         -e "SWE_AGENT_NAME=${agent}"
         -e "SWE_OUTPUT_ROOT=/workspace/outputs/${agent}"
+    )
+    append_agent_runtime_env "$agent" docker_command
+    docker_command+=(
         -v "${WORKSPACE_DIR}:/workspace:rw"
         -v "${bundle_dir}:/agent:ro"
         "$image_name"
@@ -1234,19 +1599,19 @@ main() {
             do_rebuild "${2:-}"
             ;;
         --run)
-            do_run "${2:-}" "${3:-}" "${4:-}"
+            do_run "${@:2}"
             ;;
         --run-all)
             do_run_all "${@:2}"
             ;;
         --eval)
-            do_eval "${2:-}"
+            do_eval "${@:2}"
             ;;
         --summarize)
-            do_summarize "${2:-}"
+            do_summarize "${@:2}"
             ;;
         --status)
-            do_status "${2:-}"
+            do_status "${@:2}"
             ;;
         --init)
             do_init
@@ -1258,7 +1623,7 @@ main() {
             do_cleanup
             ;;
         --cleanup-partial)
-            do_cleanup_partial
+            do_cleanup_partial "${@:2}"
             ;;
         *)
             echo "Unknown option: $1"
