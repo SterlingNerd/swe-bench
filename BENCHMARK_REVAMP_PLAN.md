@@ -1,8 +1,9 @@
 # SWE-bench Harness Revamp Plan
 
-- **Status:** P0 safety and correctness implemented; P1-P4 remain planned.
+- **Status:** P0 safety and correctness implemented; P1 completion is next;
+  P2-P4 remain planned.
 - **Target:** `agent/codex-swebench-runner`
-- **Last researched:** 2026-07-18
+- **Last researched:** 2026-07-19
 - **Last implemented:** 2026-07-19
 
 ## Executive recommendation
@@ -24,7 +25,7 @@ The redesigned harness should:
 6. Make queue continuation, infrastructure retry, agent retry, and Codex
    session continuation distinct operations.
 
-## Phase 1 implementation log — P0 safety and correctness
+## Implementation round 1 log — roadmap P0 safety and correctness
 
 Implemented on `agent/codex-swebench-runner` on 2026-07-19. This phase keeps
 `run.sh` as the compatibility wrapper and introduces a JSON-manifest artifact
@@ -79,7 +80,7 @@ runs/<run_id>/
         └── evaluation.json
 ```
 
-### Phase 1 verification
+### Implementation-round verification
 
 The regression suites cover:
 
@@ -109,6 +110,59 @@ bash tests/test_harness.sh
 - run-scoped paid-provider proxy and network isolation;
 - shadow loop analysis and guarded recovery profiles; and
 - bounded parallel workers and global spend/resource circuit breakers.
+
+### Roadmap-status correction
+
+The implementation round above was previously labeled “Phase 1,” but its
+delivered scope is roadmap **P0**, not roadmap P1. Queue continuation is the
+only material P1 behavior already present. An audit of the branch confirms
+that P1 is not complete:
+
+- there is no SQLite supervisor or durable scheduling state machine;
+- the global `flock` still serializes the entire runner;
+- there is no status-selective infrastructure retry;
+- there are no structured heartbeats or resource/provider metrics; and
+- there are no batch budgets or global circuit breakers.
+
+P1 must not be marked complete until every P1F gate below passes. This
+correction preserves the implemented work while removing the naming ambiguity
+between the first implementation round and the roadmap phase numbers.
+
+## Operational evidence incorporated on 2026-07-19
+
+The revised phases below incorporate the two most recent operator reports and
+screenshots rather than treating image management as a generic cache concern:
+
+- A roughly 250-instance run exhausted local storage. Django instance images
+  were reported around 500 MB each, while some Matplotlib instance images
+  appeared around 3 GB compressed and much larger after unpacking.
+- Docker reported about 150 GB of images on a 250 GB drive. Docker 29's image
+  listing distinguishes disk usage from content size; capacity decisions must
+  use Docker's structured accounting plus filesystem/containerd accounting,
+  not a single displayed size column.
+- Docker Hub rate limiting then prevented further pulls. A NAS-hosted writable
+  registry is therefore part of the deterministic image source and recovery
+  design, not merely an optimization.
+- One agent correctly decoded the `swebench/` prefix and then searched for the
+  misspelled `swebbench/` prefix. Image discovery, movement, digest validation,
+  and cleanup must be deterministic control-plane code using structured Docker
+  output or APIs; an LLM must never grep or move Docker-managed storage.
+- The runner currently uses per-image `docker save`/`docker load` archives and
+  `--cache_level instance`. Separate archives duplicate shared parent layers,
+  still require local unpacked storage, and instance-level retention conflicts
+  with the limited local disk.
+- Image/storage preparation currently occurs after an attempt is allocated.
+  A pull, rate-limit, registry, or capacity failure can therefore leave a
+  `started` attempt that queue continuation will skip. P1 moves preparation
+  before model-attempt allocation so infrastructure failures do not become
+  model DNFs or consume pass@1.
+
+The exact investigated image was
+`swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-25311:latest`, with
+observed digest
+`sha256:767d72ed9ee6c6c85fc54ba39457207c64da5ba6fc56d74580ed419fab0e1d2a`.
+It is the required real-image canary in P1F; the plan must not assume all
+Matplotlib or Django images have the same storage profile.
 
 ## Motivation and benchmark limitations
 
@@ -460,49 +514,237 @@ using hidden SWE-bench tests or evaluation feedback.
 
 ## Implementation sequence
 
-### P0: Safety and correctness
+### P0 — Safety and artifact correctness: complete
 
-1. Fix cleanup scope and add dry-run behavior.
-2. Add immutable run/attempt paths and a manifest.
-3. Make evaluation select an explicit eligible attempt.
-4. Add timeout/cancel checkpointing and Docker-state capture.
-5. Add tests for destructive cleanup, stale artifacts, timeout patch recovery,
-   signal handling, OOM, and interrupted collection.
+Freeze the existing manifest-owned immutable attempts, digest checks,
+checkpointing, exact cleanup, evaluation overlays, and signal-aware lifecycle.
+Preserve the five Python artifact regressions and thirteen shell lifecycle
+regressions as the floor for all later phases.
 
-### P1: Durable orchestration and observability
+### P1 — Durable orchestration and bounded image lifecycle: first priority
 
-1. Add the Python/SQLite supervisor and state machine.
-2. Replace the global process lock with run- and attempt-scoped leases.
-3. Implement queue continuation and status-selective retry.
-4. Add per-attempt structured events, heartbeats, and resource/usage metrics.
-5. Add batch-size, global-budget, and circuit-breaker controls.
+#### P1A — SQLite supervisor and state reconciliation
 
-### P2: Provider profiles and credential isolation
+1. Add `state.sqlite` with explicit, forward-only schema migrations.
+2. Make SQLite transactions the scheduling authority while retaining manifests
+   as durable, human-readable audit exports.
+3. Model the lifecycle as `planned -> preparing -> running -> checkpointing ->
+   collected -> terminal/retryable`.
+4. Import and reconcile existing manifest-backed runs without mutating
+   finalized attempts.
+5. Keep the default worker count at one.
 
-1. Add named local, Codex baseline, and guarded profiles.
-2. Add provider/model capability preflight.
-3. Add the metered Responses proxy and isolated Docker network.
-4. Verify that task processes cannot access upstream credentials.
-5. Keep the currently pinned stable Codex CLI version until a deliberate
-   benchmark-version change is approved.
+#### P1B — Leases, recovery, and retry semantics
 
-### P3: Loop analysis and experiments
+1. Replace the global process lock with run- and attempt-scoped owner/expiry
+   leases.
+2. Reclaim expired `preparing` or `running` work after Docker, WSL, or
+   supervisor failure.
+3. Keep four operations distinct: queue continuation, infrastructure retry,
+   agent retry, and Codex session continuation.
+4. Complete image and storage preparation before allocating a model attempt.
+   Preparation failures must not consume pass@1 or create a model DNF.
+5. Make retry eligibility status-selective and auditable; do not automatically
+   retry baseline agent failures.
 
-1. Normalize existing JSONL trajectories into the new event schema.
-2. Label the partial run's DNFs with the new taxonomy.
-3. Implement shadow-only loop detection.
-4. Audit detector triggers and set thresholds.
-5. Add the separately named guarded recovery profile.
-6. Run the frozen matched pilot before scaling.
+#### P1C — Structured observability
 
-### P4: Bounded throughput
+1. Emit typed events and periodic heartbeats.
+2. Record the last model event, tool event, diff change, provider usage, Docker
+   resources, and elapsed budgets.
+3. Record the exact source image reference, digest, platform, official
+   `TestSpec.env_image_key`, registry source, and cache policy.
+4. Capture Docker usage before pull, after pull, after evaluation, and after
+   eviction.
+5. Derive status from SQLite instead of scanning artifacts.
 
-1. Add a bounded worker pool with separate inference and evaluation limits.
-2. Pin worker count and provider-capacity assumptions in the run manifest.
-3. Use resource tokens for memory, CPU, GPU, and provider rate limits.
-4. Add task-specific logs and run-level aggregation safe for concurrency.
-5. Keep default concurrency at one until isolation and reproducibility tests
-   pass.
+#### P1D — Deterministic image and NAS-registry controller
+
+1. Require Docker 29.6 or newer before automating size decisions because
+   recent Docker 29 releases corrected image-size accounting behavior.
+2. Reconcile the active Docker context, image-store backend,
+   `/var/lib/containerd`, all images, and daemon storage before scheduling.
+3. Use a structured API, JSON output, and exact reference filters such as
+   `docker image ls --all --filter "reference=swebench/sweb.*" --format json`.
+   Never grep names or manipulate Docker/containerd internal files directly.
+4. Resolve official SWE-bench references and immutable digests.
+5. Retire the per-image `docker save`/`docker load` tar cache. Those archives
+   duplicate shared parent layers and do not eliminate local unpacked-image
+   storage.
+6. Add a configurable writable NAS OCI registry seeded by digest. An optional
+   pull-through mirror may be a separate service, but a proxy registry cannot
+   accept pushes and remains subject to Docker Hub fair-use limits.
+7. Keep registry credentials on the host; never expose them to task
+   containers.
+8. Start with this policy for a 250 GB local drive:
+   - do not schedule below an official 120 GB free-space floor;
+   - target no more than about 100 GB of retained Docker images;
+   - reserve projected next-image expansion plus evaluation scratch space;
+   - allow at most three concurrent/cached Matplotlib instance images; and
+   - reserve a separate, small quarantine budget for incomplete stopped
+     containers.
+
+Implement P1D in three reviewable subphases:
+
+- **P1D-1 — Configurable digest-pinned NAS registry:** configuration,
+  credential handling, official-reference resolution, digest-pinned pull, and
+  structured inventory.
+- **P1D-2 — Single-flight registry seeding on miss:** one owner seeds while
+  other workers wait, with bounded backoff and no retry stampede.
+- **P1D-3 — Destination-digest verification and source mapping:** verify the
+  destination manifest digest and record the official-to-NAS mapping before
+  scheduling.
+
+The registry-miss flow is:
+
+1. Check the NAS registry for the expected digest.
+2. Acquire a single seeding lease.
+3. Resolve the official Docker Hub digest.
+4. Copy registry-to-registry, avoiding a local Docker unpack during seeding.
+5. Verify the destination digest.
+6. Pull the NAS reference locally by digest.
+
+#### P1E — Cohort execution, eviction, and circuit breakers
+
+1. Group tasks by the official `TestSpec.env_image_key`, not by repository
+   string.
+2. Preserve this image lifecycle:
+
+   `resolve digest -> reserve local space -> check/seed NAS -> pull from NAS
+   by digest -> solve -> checkpoint/finalize -> evaluate -> persist immutable
+   evaluation overlay -> remove container -> release image lease -> remove the
+   exact local image -> remeasure storage`
+
+3. Evaluate while the image is still local. Do not delete on solve-container
+   shutdown because evaluation still needs the image.
+4. Use the official evaluator's `--cache_level env --clean True` where its
+   semantics apply, or perform explicit exact-digest removal after the durable
+   overlay is written. Changing only to `cache_level=env` is insufficient:
+   images pulled before evaluator startup are preexisting, and `clean=False`
+   preserves them.
+5. Never run `docker system prune -a` from the runner.
+6. Add global circuit breakers for storage reservation/ENOSPC, Docker Hub 429,
+   authentication failure, registry outage, digest mismatch, and Docker daemon
+   loss. Pause scheduling with bounded global backoff instead of stampeding
+   retries.
+7. Inspect evaluator `error_ids` and per-instance logs. A zero evaluator exit
+   code does not prove every task evaluated successfully.
+8. Classify infrastructure results explicitly as:
+   - `image_pull_rate_limited`;
+   - `image_pull_authentication_error`;
+   - `image_not_found`;
+   - `registry_unavailable`;
+   - `image_digest_mismatch`;
+   - `image_storage_exhausted`;
+   - `docker_daemon_unavailable`; or
+   - `evaluation_harness_error`.
+
+   None of these counts as a model DNF.
+9. Delete only the exact local reference/digest, without force, after no
+   running or retained stopped container and no worker/evaluator holds an image
+   lease. Docker must retain shared layers still referenced by other images.
+10. If an incomplete attempt retains a stopped container, or another worker or
+    evaluator still leases the image, defer eviction and charge it to the
+    quarantine budget.
+
+Implement P1E in three reviewable subphases:
+
+- **P1E-1 — Solve/evaluate image lease:** one lease spans both stages and
+  protects the image until evaluation artifacts are durable.
+- **P1E-2 — Exact post-evaluation local eviction:** non-force exact removal,
+  storage remeasurement, and proof that unrelated images/shared layers remain.
+- **P1E-3 — Quarantine and storage-pressure exceptions:** bounded retention for
+  incomplete work and predictable behavior when reservations fail.
+
+#### P1F — Completion gate
+
+P1 is complete only after all of the following pass:
+
+- crash recovery at every state transition;
+- two-supervisor contention and lease-expiry recovery;
+- queue continuation without rerunning completed work;
+- status-selective infrastructure retry without automatic agent retry;
+- simulated Docker Hub 429, ENOSPC, registry outage, and digest mismatch;
+- acceptance of the correct `swebench/sweb...` namespace and rejection of the
+  misspelled `swebbench/...` namespace;
+- exact image eviction, shared-layer preservation, and no unrelated-image
+  removal;
+- enforcement of the stopped-container quarantine cap;
+- a real canary using Matplotlib issue 25311 and its pinned digest;
+- storage remaining inside budget across multiple image cohorts; and
+- proof that SQLite, scoped leases, heartbeats, budgets, and circuit breakers
+  exist and the global lock is gone.
+
+### P2 — Provider profiles and credential isolation
+
+#### P2A — Named profiles and preflight
+
+Add named local, baseline Codex, and separately named guarded profiles plus a
+provider/model capability preflight. Keep the pinned stable Codex CLI version
+until a deliberate benchmark-version change is approved.
+
+#### P2B — Isolated provider path
+
+Add a host- or sidecar-hosted Responses proxy and an isolated Docker network.
+
+#### P2C — Run-scoped quotas
+
+Issue run-scoped proxy credentials and enforce request, token, wall-time, and
+spend quotas before scheduling more work.
+
+#### P2D — Security gate
+
+Test that task processes cannot access upstream provider credentials or bypass
+the metered proxy.
+
+### P3 — Loop analysis and guarded experiments
+
+#### P3A — Trajectory normalization and labels
+
+Normalize existing JSONL trajectories into the typed event schema and label
+the partial run's twelve DNFs with the new taxonomy.
+
+#### P3B — Shadow-only detector
+
+Implement loop/no-progress detection in shadow mode so it cannot change the
+baseline outcome.
+
+#### P3C — Contradiction fixture and deterministic control plane
+
+Include the observed Qwen behavior—correctly identifying `swebench/` and then
+grepping for `swebbench/`—as a detector fixture. Keep image discovery and all
+other infrastructure operations outside the agent and deterministic.
+
+#### P3D — Guarded recovery audit
+
+Audit false positives and threshold stability before permitting one bounded,
+explicitly named recovery action.
+
+#### P3E — Frozen matched pilot
+
+Run a paired frozen pilot comparing baseline and guarded profiles before
+scaling.
+
+### P4 — Bounded throughput
+
+#### P4A — Separate worker pools
+
+Add bounded solve and evaluation pools, initially one worker in each.
+
+#### P4B — Resource tokens
+
+Gate scheduling on CPU, memory, provider capacity, and projected image
+expansion tokens. Pin capacity assumptions in the run manifest.
+
+#### P4C — Staged scale-up
+
+Scale from attended batches of five, to an 8–12 task smoke set, to a fixed
+50-task pilot, and then a 100-task confirmation set.
+
+#### P4D — Full-run gate
+
+Run all 500 only after storage, retry, cost, isolation, reproducibility, and
+full-reporting gates pass.
 
 ## Acceptance gates before a paid pilot
 
@@ -526,9 +768,20 @@ using hidden SWE-bench tests or evaluation feedback.
 - [Introducing SWE-bench Verified](https://openai.com/index/introducing-swe-bench-verified/)
 - [SWE-bench Verified leaderboard and comparison guidance](https://www.swebench.com/verified.html)
 - [SWE-bench evaluation harness](https://github.com/SWE-bench/SWE-bench/blob/main/swebench/harness/run_evaluation.py)
+- [SWE-bench Docker setup guide](https://www.swebench.com/SWE-bench/guides/docker_setup/)
+- [SWE-bench FAQ](https://www.swebench.com/SWE-bench/faq/)
+- [SWE-bench Docker cleanup implementation](https://raw.githubusercontent.com/SWE-bench/SWE-bench/main/swebench/harness/docker_utils.py)
 - [SWE-bench experiment checklist](https://github.com/SWE-bench/experiments/blob/main/checklist.md)
 - [SWE-bench experiment artifacts and trajectory guidance](https://github.com/SWE-bench/experiments)
 - [Codex non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode)
 - [Codex Responses API proxy](https://github.com/openai/codex/blob/main/codex-rs/responses-api-proxy/README.md)
 - [Codex Action security guidance](https://github.com/openai/codex-action/blob/main/docs/security.md)
 - [AgentLens: Revealing the Lucky Pass Problem in SWE-Agent Evaluation](https://arxiv.org/abs/2605.12925)
+- [Docker containerd image store](https://docs.docker.com/engine/storage/containerd/)
+- [Docker system disk-usage reporting](https://docs.docker.com/reference/cli/docker/system/df/)
+- [Docker image listing and reference filters](https://docs.docker.com/reference/cli/docker/image/ls/)
+- [Docker exact image removal](https://docs.docker.com/reference/cli/docker/image/rm/)
+- [Docker Hub pull usage and limits](https://docs.docker.com/docker-hub/usage/pulls/)
+- [Distribution registry configuration and proxy limitations](https://distribution.github.io/distribution/about/configuration/)
+- [Distribution pull-through cache recipe](https://distribution.github.io/distribution/recipes/mirror/)
+- [Skopeo registry-to-registry image copy](https://github.com/containers/skopeo)
