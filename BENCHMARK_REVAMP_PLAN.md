@@ -2,9 +2,10 @@
 
 - **Status:** P0 safety and correctness implemented; the isolated P1A state
   foundation and local-volume portion of P1D-0 are implemented; live runner
-  activation and the real NAS P1D-0 gate remain before P1 can continue.
+  activation, side-branch regression intake, and the real NAS P1D-0 gate remain
+  before P1 can continue.
 - **Target:** `agent/codex-swebench-runner`
-- **Last researched:** 2026-07-19
+- **Last researched:** 2026-07-21
 - **Last implemented:** 2026-07-19
 
 ## Executive recommendation
@@ -188,6 +189,43 @@ push authorization, reverse-proxy headers and upload limits, concurrency, and
 capacity on its actual storage backend. A NAS-only failure is a deployment or
 storage-backend failure, not evidence that every architecture is required for
 the normal `linux/amd64` benchmark path.
+
+## Upstream test intake audit — 2026-07-21
+
+The latest pull advanced `origin/main` from the shared base `349bcab` to
+`b846bea` (`test: add comprehensive test suite for run.sh (165 tests)`). This
+side branch remains deliberately unmerged: it is twelve branch commits ahead
+of the shared base and carries the manifest, attempt, checkpoint, evaluation-
+overlay, Codex, and P1A state architecture that upstream `main` does not have.
+
+The upstream commit is still valuable as a coverage inventory. It adds CLI and
+configuration checks; dataset, instance, and bundle tests; fake-Docker run and
+failure paths; signal and run-all cases; evaluation, status, summary, and
+end-to-end checks. It also fixes two old-runner defects. Both production
+behaviors are already correct on this branch: timeout validation occurs before
+run creation, and exit cleanup addresses only `ACTIVE_CONTAINER`, avoiding the
+old no-match `grep` failure and cross-run broad cleanup.
+
+The 165 tests cannot be copied or counted unchanged. They assume flat
+`workspace/outputs/<agent>/<instance>` state, `docker cp`, broad container
+selection, mutable `result.json` evaluation folding, and implicit resume rules.
+Those expectations conflict with this branch's deliberate contracts.
+
+| Upstream coverage | Side-branch contract | Required intake |
+| --- | --- | --- |
+| CLI, config, dataset, instance, bundle | Mostly compatible public behavior | Port with current run IDs and error codes |
+| Fake-Docker `do_run` paths | Detached lifecycle and attempt bind mount | Rewrite fixture around create/start/wait/checkpoint/finalize |
+| Signal handling | One tracked active container | Retain current tests and add idle/active EXIT and INT cases |
+| Resume, eval, summary, status | Manifest selection and immutable overlay | Adapt assertions; never mutate an attempt result |
+| Partial and Docker cleanup | Exact manifest ownership and retained recovery | Reject broad or flat-path deletion expectations |
+| P1 orchestration | Absent upstream | Add new claim, lease, retry, heartbeat, breaker, and image tests |
+
+The verified side-branch baseline on 2026-07-21 is 22 passing tests: five
+artifact tests, four SQLite-state tests, and thirteen shell lifecycle tests.
+The immediate test goal is behavioral coverage of the current architecture,
+not artificial parity with an upstream count. The port should land before
+`run.sh` switches scheduling authority so the cutover has both old public-
+surface coverage and new transactional invariants.
 
 ### Roadmap-status correction
 
@@ -640,6 +678,17 @@ checkpointing, exact cleanup, evaluation overlays, and signal-aware lifecycle.
 Preserve the five Python artifact regressions and thirteen shell lifecycle
 regressions as the floor for all later phases.
 
+### Regression intake gate — immediate prerequisite
+
+Before the P1A/P1B live cutover, adapt the reusable intent from upstream
+`b846bea` to this branch. Prioritize no-Docker CLI/configuration/dataset tests,
+then a manifest-aware fake-Docker lifecycle, then run/evaluation/reporting and
+exact-cleanup integration cases. Preserve the four P1A smoke tests and add P1
+state/lease/failure cases incrementally. Do not import legacy assertions for
+flat outputs, `docker cp`, broad cleanup, mutable evaluation results, or
+implicit retries, and do not report upstream's 165-test result as this branch's
+coverage.
+
 ### P1 — Durable orchestration and bounded image lifecycle: first priority
 
 #### P1A — SQLite supervisor and state reconciliation
@@ -979,6 +1028,7 @@ full-reporting gates pass.
 - [Docker Hub pull usage and limits](https://docs.docker.com/docker-hub/usage/pulls/)
 - [Distribution registry configuration and proxy limitations](https://distribution.github.io/distribution/about/configuration/)
 - [Distribution registry deployment and writable push examples](https://distribution.github.io/distribution/about/deploying/)
+- [Distribution registry storage drivers](https://distribution.github.io/distribution/storage-drivers/)
 - [Distribution registry releases](https://github.com/distribution/distribution/releases)
 - [Distribution pull-through cache recipe](https://distribution.github.io/distribution/recipes/mirror/)
 - [Skopeo registry-to-registry image copy and multi-architecture policy](https://github.com/containers/skopeo/blob/main/docs/skopeo-copy.1.md)
