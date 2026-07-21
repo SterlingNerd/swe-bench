@@ -42,6 +42,7 @@ run_category() {
         echo "=============================================="
         
         local result
+        set +e
         if [ "$VERBOSE" -eq 1 ]; then
             bash "$test_script" --verbose
             result=$?
@@ -49,6 +50,7 @@ run_category() {
             bash "$test_script"
             result=$?
         fi
+        set -e
         
         # Parse results from log file
         local log_file="${SCRIPT_DIR}/${category}_*.log"
@@ -72,7 +74,8 @@ run_category() {
             fi
         done
         
-        return $result
+        # Don't return result code - let the script continue
+        true
     done
 }
 
