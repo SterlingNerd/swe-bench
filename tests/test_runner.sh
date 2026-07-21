@@ -22,7 +22,7 @@ VERBOSE=0
 CATEGORIES="all"
 for arg in "$@"; do
     case "$arg" in
-        T0|T1|T1b|T2|T2b|T2c|T2d|T3|T3b) CATEGORIES="$arg" ;;
+        T0|T1|T1b|T2|T2b|T2c|T2d|T3|T3b|T4) CATEGORIES="$arg" ;;
         --verbose) VERBOSE=1 ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
@@ -95,6 +95,7 @@ case "$CATEGORIES" in
     T2d) run_category "t2d" ;;
     T3) run_category "t3"; run_category "t3b" ;;
     T3b) run_category "t3b" ;;
+    T4) run_category "t4" ;;
     all)
         run_category "t0"
         run_category "t1"
@@ -105,6 +106,7 @@ case "$CATEGORIES" in
         run_category "t2d"
         run_category "t3"
         run_category "t3b"
+        run_category "t4"
         ;;
 esac
 
