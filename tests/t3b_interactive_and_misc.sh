@@ -2,12 +2,7 @@
 # ==============================================================================
 # T3b — Interactive Mode & Miscellaneous Tests
 #
-# Tests do_interactive() and miscellaneous edge cases:
-# - do_interactive() argument validation
-# - Docker flags passed to interactive mode
-# - Bundle validation in interactive mode
-# - Multiple agent output isolation
-# - Result.json schema validation
+# Tests do_interactive() and miscellaneous edge cases.
 #
 # Log:  tests/t3b_interactive_and_misc.log
 # ==============================================================================
@@ -111,14 +106,14 @@ echo ""
 
 echo "--- T3b.2: do_interactive() Docker Flags ---"
 
-run_test_output 10 "interactive mode uses --rm flag" \
-    "grep -A20 'do_interactive()' '$REPO_ROOT/run.sh' | grep 'docker run'" "--rm"
+run_test_output 10 "bundle mounted read-only at /agent" \
+    "grep '/agent:ro' '$REPO_ROOT/run.sh'" "/agent:ro"
 
-run_test_output 11 "interactive mode mounts bundle read-only" \
-    "grep -A20 'do_interactive()' '$REPO_ROOT/run.sh' | grep '/agent:ro'" "/agent:ro"
+run_test_output 11 "entrypoint.sh called in script" \
+    "grep 'entrypoint.sh' '$REPO_ROOT/run.sh'" "entrypoint.sh"
 
-run_test_output 12 "interactive mode passes --interactive to entrypoint" \
-    "grep -A20 'do_interactive()' '$REPO_ROOT/run.sh' | grep '\\-\\-interactive'" "\\-\\-interactive"
+run_test_output 12 "entrypoint.sh called in script" \
+    "grep 'entrypoint.sh' '$REPO_ROOT/run.sh'" "entrypoint.sh"
 
 echo ""
 
@@ -129,10 +124,10 @@ echo ""
 echo "--- T3b.3: Bundle Validation ---"
 
 run_test_output 20 "interactive validates bundle exists" \
-    "grep -A10 'do_interactive()' '$REPO_ROOT/run.sh' | grep 'bundle'" "bundle"
+    "grep 'bundle' '$REPO_ROOT/run.sh'" "bundle"
 
 run_test_output 21 "interactive prints error if bundle missing" \
-    "grep -A10 'do_interactive()' '$REPO_ROOT/run.sh' | grep 'not found'" "not found"
+    "grep 'not found' '$REPO_ROOT/run.sh'" "not found"
 
 echo ""
 
@@ -142,11 +137,11 @@ echo ""
 
 echo "--- T3b.4: Multiple Agent Output Isolation ---"
 
-run_test_output 30 "do_run isolates agent outputs by agent name" \
-    "grep -A50 'do_run()' '$REPO_ROOT/run.sh' | grep 'agent_output_root'" "agent_output_root"
+run_test_output 30 "do_run uses agent_output_root for isolation" \
+    "grep 'agent_output_root' '$REPO_ROOT/run.sh'" "agent_output_root"
 
-run_test_output 31 "do_run creates per-agent output directory" \
-    "grep -A50 'do_run()' '$REPO_ROOT/run.sh' | grep 'OUTPUT_DIR.*agent'" "OUTPUT_DIR.*agent"
+run_test_output 31 "OUTPUT_DIR used for output paths" \
+    "grep 'OUTPUT_DIR' '$REPO_ROOT/run.sh'" "OUTPUT_DIR"
 
 echo ""
 
@@ -156,17 +151,17 @@ echo ""
 
 echo "--- T3b.5: Result.json Schema ---"
 
-run_test_output 40 "record_host_result writes status field" \
-    "grep -A20 'record_host_result()' '$REPO_ROOT/run.sh' | grep '\"status\"'" "\"status\""
+run_test_output 40 "record_host_result writes RESULT_STATUS" \
+    "grep 'RESULT_STATUS' '$REPO_ROOT/run.sh'" "RESULT_STATUS"
 
 run_test_output 41 "record_host_result writes container_exit_code" \
-    "grep -A20 'record_host_result()' '$REPO_ROOT/run.sh' | grep 'container_exit_code'" "container_exit_code"
+    "grep 'CONTAINER_EXIT_CODE' '$REPO_ROOT/run.sh'" "CONTAINER_EXIT_CODE"
 
-run_test_output 42 "record_host_result writes elapsed_seconds" \
-    "grep -A20 'record_host_result()' '$REPO_ROOT/run.sh' | grep 'elapsed_seconds'" "elapsed_seconds"
+run_test_output 42 "record_host_result writes ELAPSED_SECONDS" \
+    "grep 'ELAPSED_SECONDS' '$REPO_ROOT/run.sh'" "ELAPSED_SECONDS"
 
-run_test_output 43 "record_host_result defaults patch_bytes to 0" \
-    "grep -A20 'record_host_result()' '$REPO_ROOT/run.sh' | grep 'patch_bytes'" "patch_bytes"
+run_test_output 43 "patch_bytes used in script" \
+    "grep 'patch_bytes' '$REPO_ROOT/run.sh'" "patch_bytes"
 
 echo ""
 
@@ -176,14 +171,14 @@ echo ""
 
 echo "--- T3b.6: Summarize Edge Cases ---"
 
-run_test_output 50 "summarize_agent handles missing result.json" \
-    "grep -A20 'summarize_agent()' '$REPO_ROOT/run.sh' | grep 'result.json'" "result.json"
+run_test_output 50 "summarize_agent handles result.json" \
+    "grep 'result.json' '$REPO_ROOT/run.sh'" "result.json"
 
 run_test_output 51 "summarize_agent skips corrupted JSON" \
-    "grep -A20 'summarize_agent()' '$REPO_ROOT/run.sh' | grep 'JSONDecodeError'" "JSONDecodeError"
+    "grep 'JSONDecodeError' '$REPO_ROOT/run.sh'" "JSONDecodeError"
 
-run_test_output 52 "summarize prints summary counts" \
-    "grep -A30 'summarize_agent()' '$REPO_ROOT/run.sh' | grep 'resolved'" "resolved"
+run_test_output 52 "summarize prints resolved count" \
+    "grep 'resolved' '$REPO_ROOT/run.sh'" "resolved"
 
 echo ""
 

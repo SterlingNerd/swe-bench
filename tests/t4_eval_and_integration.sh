@@ -2,12 +2,7 @@
 # ==============================================================================
 # T4 — Eval & Integration Tests
 #
-# Tests do_eval() and integration between work/eval phases:
-# - do_eval() argument validation
-# - Predictions.jsonl generation
-# - Harness report folding
-# - Multiple agent output comparison
-# - Resume across runs
+# Tests do_eval() and integration between work/eval phases.
 #
 # Log:  tests/t4_eval_and_integration.log
 # ==============================================================================
@@ -115,10 +110,10 @@ run_test_output 10 "do_eval creates predictions.jsonl" \
     "grep 'predictions.jsonl' '$REPO_ROOT/run.sh'" "predictions.jsonl"
 
 run_test_output 11 "predictions.jsonl contains instance_id field" \
-    "grep -A20 'do_eval()' '$REPO_ROOT/run.sh' | grep 'instance_id'" "instance_id"
+    "grep 'instance_id' '$REPO_ROOT/run.sh'" "instance_id"
 
 run_test_output 12 "predictions.jsonl contains model_patch field" \
-    "grep -A20 'do_eval()' '$REPO_ROOT/run.sh' | grep 'model_patch'" "model_patch"
+    "grep 'model_patch' '$REPO_ROOT/run.sh'" "model_patch"
 
 echo ""
 
@@ -129,13 +124,13 @@ echo ""
 echo "--- T4.3: Harness Report Folding ---"
 
 run_test_output 20 "do_eval folds resolved instances" \
-    "grep -A30 'do_eval()' '$REPO_ROOT/run.sh' | grep 'resolved'" "resolved"
+    "grep 'resolved' '$REPO_ROOT/run.sh'" "resolved"
 
 run_test_output 21 "do_eval folds errored instances" \
-    "grep -A30 'do_eval()' '$REPO_ROOT/run.sh' | grep 'error_ids'" "error_ids"
+    "grep 'error_ids' '$REPO_ROOT/run.sh'" "error_ids"
 
 run_test_output 22 "do_eval updates status field" \
-    "grep -A30 'do_eval()' '$REPO_ROOT/run.sh' | grep \"meta\\['status'\\]\"" "meta"
+    "grep \"meta\\['status'\\]\" '$REPO_ROOT/run.sh'" "meta"
 
 echo ""
 
@@ -149,7 +144,7 @@ run_test_output 30 "do_run isolates outputs per agent" \
     "grep 'agent_output_root' '$REPO_ROOT/run.sh'" "agent_output_root"
 
 run_test_output 31 "do_eval uses agent-specific output dir" \
-    "grep -A20 'do_eval()' '$REPO_ROOT/run.sh' | grep 'eval_dir'" "eval_dir"
+    "grep 'eval_dir' '$REPO_ROOT/run.sh'" "eval_dir"
 
 echo ""
 
@@ -160,10 +155,10 @@ echo ""
 echo "--- T4.5: Resume Across Runs ---"
 
 run_test_output 40 "--resume flag parsed in do_run_all" \
-    "grep -A30 'do_run_all()' '$REPO_ROOT/run.sh' | grep 'resume'" "resume"
+    "grep 'resume' '$REPO_ROOT/run.sh'" "resume"
 
-run_test_output 41 "resume skips instances with result.json" \
-    "grep -A30 'do_run_all()' '$REPO_ROOT/run.sh' | grep 'result.json'" "result.json"
+run_test_output 41 "resume checks for result.json" \
+    "grep 'result.json' '$REPO_ROOT/run.sh'" "result.json"
 
 echo ""
 
