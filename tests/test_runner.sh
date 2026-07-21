@@ -22,7 +22,7 @@ VERBOSE=0
 CATEGORIES="all"
 for arg in "$@"; do
     case "$arg" in
-        T0|T1|T2|T3) CATEGORIES="$arg" ;;
+        T0|T1|T1b|T2|T2b|T2c|T3) CATEGORIES="$arg" ;;
         --verbose) VERBOSE=1 ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
@@ -82,15 +82,24 @@ echo " Repo: ${REPO_ROOT}"
 echo " Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "=============================================="
 
+# Convert category to lowercase for file matching
+CATEGORY_LOWER=$(echo "$CATEGORIES" | tr 'A-Z' 'a-z')
+
 case "$CATEGORIES" in
     T0) run_category "t0" ;;
-    T1) run_category "t1" ;;
-    T2) run_category "t2" ;;
+    T1) run_category "t1"; run_category "t1b" ;;
+    T1b) run_category "t1b" ;;
+    T2) run_category "t2"; run_category "t2b"; run_category "t2c" ;;
+    T2b) run_category "t2b" ;;
+    T2c) run_category "t2c" ;;
     T3) run_category "t3" ;;
     all)
         run_category "t0"
         run_category "t1"
+        run_category "t1b"
         run_category "t2"
+        run_category "t2b"
+        run_category "t2c"
         run_category "t3"
         ;;
 esac
