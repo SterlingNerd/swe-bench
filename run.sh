@@ -60,7 +60,10 @@ STOPPED=0
 stop_running_containers() {
     [ "$STOPPED" -eq 1 ] && return
     STOPPED=1
-    docker ps --format '{{.Names}}' 2>/dev/null | grep '^swe_' | while read -r cname; do
+    local containers
+    mapfile -t containers < <(docker ps --format '{{.Names}}' 2>/dev/null | grep '^swe_' || true)
+    for cname in "${containers[@]}"; do
+        [ -z "$cname" ] && continue
         echo "  Stopping container: ${cname}"
         docker stop "$cname" >/dev/null 2>&1 || true
     done
@@ -804,6 +807,12 @@ do_run_all() {
             *)         echo "Unknown option: $1"; return 1 ;;
         esac
     done
+
+    # Validate timeout is numeric
+    if ! [[ "$timeout_sec" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: Timeout must be a non-negative integer, got '${timeout_sec}'."
+        return 1
+    fi
 
     # Validate agent exists
     if [ ! -d "${AGENTS_DIR}/${agent}" ]; then

@@ -1,0 +1,470 @@
+#!/bin/bash
+# ==============================================================================
+# Fake Docker — PATH-swappable mock for testing run.sh
+#
+# Usage: Put this directory first in PATH before running tests.
+# Behavior controlled by SWE_DOCKER_MODE env var:
+#   success    — docker run exits 0, creates mock outputs
+#   timeout    — docker run exits 124 (simulated timeout)
+#   error      — docker run exits 1 (simulated failure)
+#   cp_fail    — docker run succeeds but docker cp fails
+#   oom        — docker run exits 137 (OOM killed)
+#
+# All "containers" are simulated — no real Docker calls.
+# ==============================================================================
+
+set -euo pipefail
+
+MODE="${SWE_DOCKER_MODE:-success}"
+FIXTURES_DIR="${SWE_FIXTURES_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+TEST_OUTPUTS="${SWE_TEST_OUTPUTS:-/tmp/swe-docker-mock.XXXXXX}"
+
+# Generate a unique container name if not provided
+CONTAINER_NAME=""
+IMAGE_NAME=""
+VOLUMES=()
+ENV_VARS=()
+COMMAND_ARGS=()
+TTY_FLAG=0
+INTERACTIVE_FLAG=0
+
+# Parse docker arguments
+parse_args() {
+    local i=0
+    while [ $i -lt $# ]; do
+        case "${!i}" in
+            --name)
+                CONTAINER_NAME="${2:-mock-container}"
+                i=$((i + 2))
+                ;;
+            --rm)
+                # No-op for mock
+                i=$((i + 1))
+                ;;
+            -i|-t|-it)
+                TTY_FLAG=1
+                i=$((i + 1))
+                ;;
+            -e)
+                ENV_VARS+=("${2:-}")
+                i=$((i + 2))
+                ;;
+            -v)
+                VOLUMES+=("${2:-}")
+                i=$((i + 2))
+                ;;
+            --memory|--memory-swap|--pids-limit|--tmpfs|--cap-drop|--security-opt|--add-host)
+                # Skip flag and value
+                i=$((i + 2))
+                ;;
+            --signal|--time)
+                # Skip flag and value
+                i=$((i + 2))
+                ;;
+            *)
+                # Could be image name or command args
+                if [ -z "$IMAGE_NAME" ]; then
+                    IMAGE_NAME="${!i}"
+                else
+                    COMMAND_ARGS+=("${!i}")
+                fi
+                i=$((i + 1))
+                ;;
+        esac
+    done
+}
+
+# Handle docker run
+cmd_run() {
+    parse_args "$@"
+
+    # Generate container name if not provided
+    [ -z "$CONTAINER_NAME" ] && CONTAINER_NAME="swe_mock_$$"
+
+    echo "[MOCK DOCKER] run: $CONTAINER_NAME (image=$IMAGE_NAME, mode=$MODE)" >&2
+
+    case "$MODE" in
+        success)
+            # Simulate successful container run — create mock outputs
+            _create_mock_outputs
+            return 0
+            ;;
+        timeout)
+            # Simulate timeout (exit 124)
+            sleep 0.1  # Small delay to simulate work
+            echo "[MOCK DOCKER] Container timed out" >&2
+            return 124
+            ;;
+        error)
+            # Simulate container error
+            echo "[MOCK DOCKER] Container exited with error" >&2
+            return 1
+            ;;
+        cp_fail)
+            # Simulate successful run but outputs won't be copyable
+            _create_mock_outputs
+            # Mark that cp should fail
+            touch "${TEST_OUTPUTS}/.cp_fail"
+            return 0
+            ;;
+        oom)
+            # Simulate OOM kill (exit 137)
+            echo "[MOCK DOCKER] Container OOM killed" >&2
+            return 137
+            ;;
+        *)
+            echo "[MOCK DOCKER] Unknown mode: $MODE" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Create mock outputs that do_run() expects to find
+_create_mock_outputs() {
+    # Parse volumes to find output directory
+    local output_dir=""
+    for vol in "${VOLUMES[@]}"; do
+        if echo "$vol" | grep -q "/workspace/outputs"; then
+            # Extract the host path (before the :)
+            output_dir=$(echo "$vol" | cut -d: -f1)
+            break
+        fi
+    done
+
+    # Also check env vars for SWE_OUTPUT_ROOT
+    for env in "${ENV_VARS[@]}"; do
+        if echo "$env" | grep -q "SWE_OUTPUT_ROOT="; then
+            local root=$(echo "$env" | cut -d= -f2)
+            # Parse instance_id from command args
+            local iid="${COMMAND_ARGS[0]:-unknown}"
+            output_dir="${root}/${iid}"
+            break
+        fi
+    done
+
+    if [ -n "$output_dir" ]; then
+        mkdir -p "$output_dir"
+
+        # Write result.json based on mode
+        case "$MODE" in
+            success)
+                cat > "${output_dir}/result.json" <<'EOF'
+{
+  "status": "patch_collected",
+  "patch_bytes": 42,
+  "elapsed_seconds": 5,
+  "agent_exit_code": 0
+}
+EOF
+                echo "diff --git a/test.py b/test.py" > "${output_dir}/patch.diff"
+                echo "+print('hello')" >> "${output_dir}/patch.diff"
+                ;;
+            timeout)
+                cat > "${output_dir}/result.json" <<'EOF'
+{
+  "status": "timed_out",
+  "patch_bytes": 0,
+  "elapsed_seconds": 3600,
+  "agent_exit_code": 124
+}
+EOF
+                : > "${output_dir}/patch.diff"
+                ;;
+            error)
+                cat > "${output_dir}/result.json" <<'EOF'
+{
+  "status": "agent_error",
+  "patch_bytes": 0,
+  "elapsed_seconds": 10,
+  "agent_exit_code": 1
+}
+EOF
+                : > "${output_dir}/patch.diff"
+                ;;
+            oom)
+                cat > "${output_dir}/result.json" <<'EOF'
+{
+  "status": "container_error",
+  "patch_bytes": 0,
+  "elapsed_seconds": 30,
+  "agent_exit_code": 137
+}
+EOF
+                : > "${output_dir}/patch.diff"
+                ;;
+        esac
+
+        # Write other expected files
+        echo "Mock agent output for ${COMMAND_ARGS[0]:-unknown}" > "${output_dir}/agent_output.txt"
+        echo "Mock stderr" > "${output_dir}/agent_stderr.txt"
+
+        # Create session directory if pi is the agent
+        local agent_name=""
+        for env in "${ENV_VARS[@]}"; do
+            if echo "$env" | grep -q "SWE_AGENT_NAME="; then
+                agent_name=$(echo "$env" | cut -d= -f2)
+                break
+            fi
+        done
+
+        if [ "$agent_name" = "pi" ]; then
+            mkdir -p "${output_dir}/pi-sessions"
+            echo "Mock session data" > "${output_dir}/pi-sessions/session.json"
+        fi
+
+        # Write meta.json
+        cat > "${output_dir}/meta.json" <<EOF
+{
+  "instance_id": "${COMMAND_ARGS[0]:-unknown}",
+  "agent": "${agent_name:-mock}",
+  "model": "test-model",
+  "provider": "local"
+}
+EOF
+
+        echo "[MOCK DOCKER] Outputs written to ${output_dir}" >&2
+    fi
+}
+
+# Handle docker inspect
+cmd_inspect() {
+    parse_args "$@"
+
+    local format=""
+    local container="${COMMAND_ARGS[0]:-mock-container}"
+
+    # Parse --format flag
+    local i=0
+    while [ $i -lt $# ]; do
+        if [ "${!i}" = "--format" ]; then
+            format="${2:-}"
+            i=$((i + 2))
+        else
+            i=$((i + 1))
+        fi
+    done
+
+    echo "[MOCK DOCKER] inspect: $container (format=$format)" >&2
+
+    case "$format" in
+        '{{.State.Status}}')
+            echo "running"
+            ;;
+        '{{.State.Running}}')
+            echo "true"
+            ;;
+        *)
+            # Return minimal JSON for other formats
+            cat <<EOF
+{
+  "Id": "mock123",
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "OOMKilled": false,
+    "Error": ""
+  }
+}
+EOF
+            ;;
+    esac
+    return 0
+}
+
+# Handle docker rm
+cmd_rm() {
+    parse_args "$@"
+    echo "[MOCK DOCKER] rm: ${COMMAND_ARGS[0]:-mock-container}" >&2
+    return 0
+}
+
+# Handle docker stop
+cmd_stop() {
+    parse_args "$@"
+    echo "[MOCK DOCKER] stop: ${COMMAND_ARGS[0]:-mock-container}" >&2
+    return 0
+}
+
+# Handle docker cp
+cmd_cp() {
+    # docker cp has no image name, just src and dst
+    local src="${1:-}"
+    local dst="${2:-}"
+
+    echo "[MOCK DOCKER] cp: $src -> $dst" >&2
+
+    # Check if cp should fail
+    if [ -f "${TEST_OUTPUTS}/.cp_fail" ]; then
+        echo "[MOCK DOCKER] cp FAILED (simulated)" >&2
+        return 1
+    fi
+
+    # Parse source to get container path and instance ID
+    local container_path=""
+    local instance_id=""
+    if echo "$src" | grep -q ":/workspace/outputs/"; then
+        container_path=$(echo "$src" | sed 's|.*:/workspace/outputs/||')
+        # Extract agent and instance_id from path like mock-test/astropy__astropy-7166
+        instance_id=$(echo "$container_path" | rev | cut -d/ -f1 | rev)
+    fi
+
+    # Create destination with mock data
+    if [ -n "$dst" ] && [ -n "$instance_id" ]; then
+        mkdir -p "${dst}/${instance_id}"
+        cat > "${dst}/${instance_id}/result.json" <<'EOF'
+{
+  "status": "patch_collected",
+  "patch_bytes": 42,
+  "elapsed_seconds": 5,
+  "agent_exit_code": 0
+}
+EOF
+        echo "diff --git a/test.py b/test.py" > "${dst}/${instance_id}/patch.diff"
+        echo "+print('hello')" >> "${dst}/${instance_id}/patch.diff"
+        echo "Mock agent output" > "${dst}/${instance_id}/agent_output.txt"
+    fi
+
+    return 0
+}
+
+# Handle docker ps
+cmd_ps() {
+    parse_args "$@"
+    # Return empty — no running containers in mock mode
+    return 0
+}
+
+# Handle docker network
+cmd_network() {
+    local subcmd="${1:-}"
+    shift || true
+    case "$subcmd" in
+        disconnect)
+            echo "[MOCK DOCKER] network disconnect: $*" >&2
+            ;;
+        inspect)
+            echo "[]"
+            ;;
+        *)
+            echo "[MOCK DOCKER] network $subcmd: $*" >&2
+            ;;
+    esac
+    return 0
+}
+
+# Handle docker image
+cmd_image() {
+    local subcmd="${1:-}"
+    shift || true
+    case "$subcmd" in
+        inspect)
+            echo "[MOCK DOCKER] image inspect: $*" >&2
+            # Return success — image "exists"
+            return 0
+            ;;
+        rmi)
+            echo "[MOCK DOCKER] image rm: $*" >&2
+            return 0
+            ;;
+        ls)
+            # Parse --format flag
+            local format=""
+            while [ $# -gt 0 ]; do
+                if [ "$1" = "--format" ]; then
+                    format="$2"
+                    shift 2
+                else
+                    shift
+                fi
+            done
+            # Return mock image list if format is specified
+            if [ -n "$format" ]; then
+                echo "swebench/sweb.eval.x86_64.test_1776_test-12345:latest abc123"
+            fi
+            return 0
+            ;;
+        pull)
+            echo "[MOCK DOCKER] image pull: $*" >&2
+            return 0
+            ;;
+        *)
+            echo "[MOCK DOCKER] image $subcmd: $*" >&2
+            return 0
+            ;;
+    esac
+}
+
+# Handle docker system
+cmd_system() {
+    local subcmd="${1:-}"
+    shift || true
+    case "$subcmd" in
+        prune)
+            echo "[MOCK DOCKER] system prune" >&2
+            return 0
+            ;;
+        *)
+            echo "[MOCK DOCKER] system $subcmd: $*" >&2
+            return 0
+            ;;
+    esac
+}
+
+# Handle docker info
+cmd_info() {
+    echo "[MOCK DOCKER] info" >&2
+    # Return minimal valid output
+    cat <<'EOF'
+Client:
+ Version:    mock
+
+Server:
+ Containers: 0
+  Running: 0
+  Paused: 0
+  Stopped: 0
+ Images: 0
+ Server Version: mock
+ Storage Driver: overlay2
+EOF
+    return 0
+}
+
+# Handle docker version
+cmd_version() {
+    echo "[MOCK DOCKER] version" >&2
+    echo "mock"
+    return 0
+}
+
+# Main dispatch
+main() {
+    local cmd="${1:-help}"
+    shift || true
+
+    case "$cmd" in
+        run)      cmd_run "$@" ;;
+        inspect)  cmd_inspect "$@" ;;
+        rm)       cmd_rm "$@" ;;
+        stop)     cmd_stop "$@" ;;
+        cp)       cmd_cp "$@" ;;
+        ps)       cmd_ps "$@" ;;
+        network)  cmd_network "$@" ;;
+        image)    cmd_image "$@" ;;
+        system)   cmd_system "$@" ;;
+        info)     cmd_info "$@" ;;
+        version)  cmd_version "$@" ;;
+        help|--help|-h)
+            echo "Mock Docker — for testing run.sh"
+            echo "Usage: SWE_DOCKER_MODE=<mode> docker-wrapper.sh <command> [args...]"
+            echo ""
+            echo "Modes: success, timeout, error, cp_fail, oom"
+            ;;
+        *)
+            echo "[MOCK DOCKER] Unknown command: $cmd" >&2
+            return 1
+            ;;
+    esac
+}
+
+main "$@"
