@@ -5,7 +5,7 @@
 > flat-output and `docker cp` design below was superseded by manifest-owned,
 > attempt-scoped bind mounts in the 2026-07-19 P0 implementation.
 
-## Active roadmap checklist — reconciled 2026-07-19
+## Active roadmap checklist — reconciled 2026-07-21
 
 This is the durable execution checklist for the current branch. The complete
 rationale, operational evidence, acceptance details, and research references
@@ -27,7 +27,38 @@ remain open.
 - [x] Limit cleanup to exact manifest-owned paths and default partial cleanup to
   dry-run.
 - [x] Preserve the five Python artifact tests and thirteen shell lifecycle
-  tests as the regression floor.
+  tests as the P0 regression floor.
+
+### Regression intake gate — before the live P1 scheduler cutover
+
+The 2026-07-21 pull advanced `origin/main` to `b846bea`, which reports 165
+passing tests for the older flat-output/`docker cp` runner. It is not merged
+into this side branch: its fixtures and many expected paths conflict with the
+manifest-owned attempts, bind-mounted artifacts, immutable evaluation
+overlays, and retained-container recovery now implemented here.
+
+- [x] Audit `b846bea` and its seven constituent test commits.
+- [x] Confirm its two production fixes are already represented here:
+  `--run-all --timeout` rejects non-integers before a run is created, and the
+  EXIT path stops only this process's tracked active container rather than a
+  broad `grep`-selected set.
+- [x] Verify the current side-branch floor: five artifact tests, four P1A state
+  tests, and thirteen shell lifecycle tests (22 total).
+- [ ] Port the reusable CLI, configuration, dataset-cache, instance lookup,
+  bundle, and argument-validation cases without restoring legacy path rules.
+- [ ] Replace the upstream fake-Docker fixture with manifest-aware coverage of
+  detached create/start/wait, attempt bind mounts, checkpoint/finalize order,
+  OOM/timeout/operator-cancel classification, and incomplete-container
+  retention.
+- [ ] Expand run-all/resume, evaluation, summary, status, and cleanup tests
+  around immutable run IDs, explicit attempt selection, digest validation,
+  evaluation overlays, and exact manifest-owned cleanup.
+- [ ] Add regression cases for P1 claims, expired leases, pre-attempt image
+  preparation, status-selective infrastructure retry, heartbeats, circuit
+  breakers, and exact post-evaluation image eviction as those features land.
+- [ ] Keep coverage parity behavioral rather than numeric: do not count the
+  upstream 165 tests on this branch and do not copy assertions that require
+  flat outputs, `docker cp`, broad `swe_*` cleanup, or implicit retry.
 
 ### P1 — Durable orchestration and bounded image lifecycle
 
@@ -235,6 +266,7 @@ Subphases:
 
 #### P1F — Completion gate
 
+- [ ] Pass the regression-intake gate above on the side-branch architecture.
 - [ ] Recover from a crash at every state transition.
 - [ ] Pass two-supervisor contention and lease-expiry recovery tests.
 - [ ] Continue a queue without rerunning completed work.

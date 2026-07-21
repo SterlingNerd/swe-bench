@@ -27,6 +27,15 @@ preparation, leases, and recovery as one atomic cutover. The local-volume
 P1D-0 registry qualification passed; the intended NAS endpoint still needs its
 TLS/auth/proxy/storage qualification before it can become a runner dependency.
 
+The current side-branch regression floor is 22 passing tests: five artifact
+tests, four state-machine tests, and thirteen shell lifecycle tests. Upstream
+`origin/main` commit `b846bea` added a separate 165-test suite for the older
+flat-output/`docker cp` runner. That suite has been audited but is not present
+on this branch and must not be counted as side-branch coverage. Its reusable
+test intent will be ported to the manifest, attempt, bind-mount, evaluation-
+overlay, and SQLite contracts before the live P1 scheduler cutover; see the
+regression-intake gate in `BENCHMARK_REVAMP_PLAN.md` and `TODO.md`.
+
 Each agent is built as a relocatable bundle under `agents/<agent>/bundle/`.
 `run.sh` mounts the selected bundle read-only at `/agent` in the official
 per-instance SWE-bench image. The image's repository is already checked out at
@@ -257,13 +266,17 @@ Repository-controlled commands and tests run inside the same container and may
 be able to inspect its environment. Do not pass a personal Codex login or a
 broadly privileged API credential.
 
-Run the host-side regression checks with:
+Run the current 22-test host-side regression floor with:
 
 ```bash
 python3 -B -m unittest -v tests/test_run_state.py
 python3 -B -m unittest -v tests/test_run_artifacts.py
 bash tests/test_harness.sh
 ```
+
+The upstream 165-test count is not additive: those tests exercise a different
+runner architecture and require semantic adaptation before they can become
+part of this branch's suite.
 
 ## Git Remote
 
