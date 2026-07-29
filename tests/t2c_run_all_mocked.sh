@@ -184,6 +184,43 @@ run_test_output 41 "run_all prints Done summary" \
 echo ""
 
 # ==============================================================================
+# 2c.6 — do_run_all() Resume & Failure Continuation (T2-24/25/26)
+#
+# Tests that do_run_all() correctly handles:
+# - T2-24: --resume with all instances complete → skips all
+# - T2-25: --resume with some incomplete → runs only incomplete ones
+# - T2-26: One instance fails, continues to next
+#
+# These are structural tests verifying the code logic paths exist.
+# Full integration requires real docker + dataset (covered in T3).
+# ==============================================================================
+
+echo "--- T2c.6: do_run_all() Resume & Failure Continuation ---"
+
+# T2-24: --resume with all instances complete → skips all
+# Verify the resume logic checks for result.json and increments skipped counter
+TOTAL=$((TOTAL + 1))
+echo "T2c-24: resume skips instances with result.json ..." >&2
+run_test_output 24 "resume checks for result.json before running" \
+    "grep -A5 'resume' '$REPO_ROOT/run.sh' | grep 'result.json'" "result.json"
+
+# T2-25: --resume with some incomplete → runs only incomplete ones
+# Verify the loop structure handles both skipped and run cases
+TOTAL=$((TOTAL + 1))
+echo "T2c-25: resume increments skipped counter ..." >&2
+run_test_output 25 "resume increments skipped counter" \
+    "grep -A100 'do_run_all()' '$REPO_ROOT/run.sh' | grep 'skipped='" "skipped="
+
+# T2-26: One instance fails, continues to next
+# Verify the loop catches do_run failures and increments failed counter
+TOTAL=$((TOTAL + 1))
+echo "T2c-26: failure increments failed counter, loop continues ..." >&2
+run_test_output 26 "failure increments failed counter" \
+    "grep -A100 'do_run_all()' '$REPO_ROOT/run.sh' | grep 'failed='" "failed="
+
+echo ""
+
+# ==============================================================================
 # Summary
 # ==============================================================================
 

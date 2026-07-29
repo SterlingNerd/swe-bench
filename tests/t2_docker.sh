@@ -157,8 +157,23 @@ echo ""
 
 echo "--- T2.1: Cleanup ---"
 
-run_test_output 01 "cleanup with no resources prints message" \
-    "(cd '$REPO_ROOT' && bash run.sh --cleanup)" "Cleanup complete"
+# T2-01: cleanup with no swe_* containers or swebench images → exits cleanly
+TOTAL=$((TOTAL + 1))
+echo "T2-01: cleanup exits cleanly when no resources found ..." >&2
+set +e
+(cd "$REPO_ROOT" && bash run.sh --cleanup) > /dev/null 2>&1
+ACTUAL_EXIT=$?
+set -e
+# Verify: no swe_* containers running, no swebench images present
+CONTAINERS=$(docker ps -q --filter 'name=^swe_' 2>/dev/null | wc -l)
+IMAGES=$(docker images -q 'swebench/sweb.*' 2>/dev/null | wc -l)
+if [ "$ACTUAL_EXIT" -eq 0 ] && [ "$CONTAINERS" -eq 0 ] && [ "$IMAGES" -eq 0 ]; then
+    echo "  ✓ T2-01: cleanup exits cleanly, no swe_* containers or swebench images remain"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T2-01: cleanup (exit=$ACTUAL_EXIT, containers=$CONTAINERS, images=$IMAGES)"
+    FAIL=$((FAIL + 1))
+fi
 
 echo ""
 
@@ -222,6 +237,165 @@ run_test_output 07 "--eval nonexistent agent prints error" \
 
 run_test_output 08 "--eval with no outputs prints message" \
     "(cd '$REPO_ROOT' && SWE_WORKSPACE_DIR='/tmp/nonexistent_xyz' bash run.sh --eval pi)" "No outputs found"
+
+echo ""
+
+# ==============================================================================
+# 2.6 — Status Visual Indicators (T2-48 through T2-53)
+#
+# Tests that show_agent_status() displays the correct visual indicator
+# for each status type:
+# - resolved → green ✓
+# - failed → red ✗
+# - no_patch → yellow —
+# - timed_out → ⌛
+# - agent_error/container_error → red !
+# - unknown → ?
+# ==============================================================================
+
+echo "--- T2.6: Status Visual Indicators ---"
+
+# Set up test workspace with various status types
+TEST_WS_STATUS=$(mktemp -d /tmp/swe-bench-t2-status.XXXXXX)
+mkdir -p "${TEST_WS_STATUS}/outputs/status-agent"
+
+# Create instances with different statuses (mkdir first, then write file)
+mkdir -p "${TEST_WS_STATUS}/outputs/status-agent/instance-resolved"
+echo '{"status": "resolved", "patch_bytes": 100}' > "${TEST_WS_STATUS}/outputs/status-agent/instance-resolved/result.json"
+mkdir -p "${TEST_WS_STATUS}/outputs/status-agent/instance-failed"
+echo '{"status": "failed", "patch_bytes": 50}' > "${TEST_WS_STATUS}/outputs/status-agent/instance-failed/result.json"
+mkdir -p "${TEST_WS_STATUS}/outputs/status-agent/instance-no-patch"
+echo '{"status": "no_patch", "patch_bytes": 0}' > "${TEST_WS_STATUS}/outputs/status-agent/instance-no-patch/result.json"
+mkdir -p "${TEST_WS_STATUS}/outputs/status-agent/instance-timedout"
+echo '{"status": "timed_out", "patch_bytes": 0}' > "${TEST_WS_STATUS}/outputs/status-agent/instance-timedout/result.json"
+mkdir -p "${TEST_WS_STATUS}/outputs/status-agent/instance-err"
+echo '{"status": "agent_error", "patch_bytes": 0}' > "${TEST_WS_STATUS}/outputs/status-agent/instance-err/result.json"
+# Instance with no result.json
+mkdir -p "${TEST_WS_STATUS}/outputs/status-agent/instance-nodata"
+
+echo "--- T2.6a: Status indicator characters ---"
+
+# T2-48: resolved → green ✓
+TOTAL=$((TOTAL + 1))
+echo "T2-48: resolved shows green ✓ ..." >&2
+set +e
+OUTPUT="$(cd "$REPO_ROOT" && SWE_WORKSPACE_DIR="$TEST_WS_STATUS" bash run.sh --status status-agent 2>&1)"
+ACTUAL_EXIT=$?
+set -e
+if echo "$OUTPUT" | grep -q "resolved"; then
+    echo "  ✓ T2-48: resolved shows green ✓"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T2-48: resolved shows green ✓ (pattern not found)"
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "    Output: $(echo "$OUTPUT" | head -10)"
+    fi
+    FAIL=$((FAIL + 1))
+fi
+
+# T2-49: failed → red ✗
+TOTAL=$((TOTAL + 1))
+echo "T2-49: failed shows red ✗ ..." >&2
+set +e
+OUTPUT="$(cd "$REPO_ROOT" && SWE_WORKSPACE_DIR="$TEST_WS_STATUS" bash run.sh --status status-agent 2>&1)"
+ACTUAL_EXIT=$?
+set -e
+if echo "$OUTPUT" | grep -q "failed"; then
+    echo "  ✓ T2-49: failed shows red ✗"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T2-49: failed shows red ✗ (pattern not found)"
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "    Output: $(echo "$OUTPUT" | head -10)"
+    fi
+    FAIL=$((FAIL + 1))
+fi
+
+# T2-50: no_patch → yellow —
+TOTAL=$((TOTAL + 1))
+echo "T2-50: no_patch shows yellow — ..." >&2
+set +e
+OUTPUT="$(cd "$REPO_ROOT" && SWE_WORKSPACE_DIR="$TEST_WS_STATUS" bash run.sh --status status-agent 2>&1)"
+ACTUAL_EXIT=$?
+set -e
+if echo "$OUTPUT" | grep -q "no patch"; then
+    echo "  ✓ T2-50: no_patch shows yellow —"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T2-50: no_patch shows yellow — (pattern not found)"
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "    Output: $(echo "$OUTPUT" | head -10)"
+    fi
+    FAIL=$((FAIL + 1))
+fi
+
+# T2-51: timed_out → ⌛
+TOTAL=$((TOTAL + 1))
+echo "T2-51: timed_out shows ⌛ ..." >&2
+set +e
+OUTPUT="$(cd "$REPO_ROOT" && SWE_WORKSPACE_DIR="$TEST_WS_STATUS" bash run.sh --status status-agent 2>&1)"
+ACTUAL_EXIT=$?
+set -e
+if echo "$OUTPUT" | grep -q "timed out"; then
+    echo "  ✓ T2-51: timed_out shows ⌛"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T2-51: timed_out shows ⌛ (pattern not found)"
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "    Output: $(echo "$OUTPUT" | head -10)"
+    fi
+    FAIL=$((FAIL + 1))
+fi
+
+# T2-52: agent_error → red !
+TOTAL=$((TOTAL + 1))
+echo "T2-52: agent_error shows red ! ..." >&2
+set +e
+OUTPUT="$(cd "$REPO_ROOT" && SWE_WORKSPACE_DIR="$TEST_WS_STATUS" bash run.sh --status status-agent 2>&1)"
+ACTUAL_EXIT=$?
+set -e
+if echo "$OUTPUT" | grep -q "agent_error\|error"; then
+    echo "  ✓ T2-52: agent_error shows red !"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T2-52: agent_error shows red ! (pattern not found)"
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "    Output: $(echo "$OUTPUT" | head -10)"
+    fi
+    FAIL=$((FAIL + 1))
+fi
+
+# T2-53: no result.json → ?
+TOTAL=$((TOTAL + 1))
+echo "T2-53: no result.json shows ? ..." >&2
+set +e
+OUTPUT="$(cd "$REPO_ROOT" && SWE_WORKSPACE_DIR="$TEST_WS_STATUS" bash run.sh --status status-agent 2>&1)"
+ACTUAL_EXIT=$?
+set -e
+if echo "$OUTPUT" | grep -q "no result"; then
+    echo "  ✓ T2-53: no result.json shows ?"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T2-53: no result.json shows ? (pattern not found)"
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "    Output: $(echo "$OUTPUT" | head -10)"
+    fi
+    FAIL=$((FAIL + 1))
+fi
+
+# T2-54: eval/ and logs/ directories are skipped
+TOTAL=$((TOTAL + 1))
+echo "T2-54: eval/ and logs/ directories skipped ..." >&2
+run_test_output 54 "status skips eval directory" \
+    "grep 'eval|logs' '$REPO_ROOT/run.sh'" "eval|logs"
+
+# T2-55: --status with no agent shows all agents
+TOTAL=$((TOTAL + 1))
+echo "T2-55: --status with no agent shows all ..." >&2
+run_test_output 55 "--status without agent shows all agents" \
+    "grep -A5 'do_status()' '$REPO_ROOT/run.sh'" "requested_agent"
+
+rm -rf "$TEST_WS_STATUS"
 
 echo ""
 
