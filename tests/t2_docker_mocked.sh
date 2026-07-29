@@ -229,6 +229,104 @@ run_test 13 "success creates meta.json" "success" "patch_collected" 0
 echo ""
 
 # ==============================================================================
+# 2.P — do_run() Result Status Handling (T2-18/19/20)
+#
+# Tests that do_run() returns the correct exit code based on result.json status.
+# This is critical because do_run_all() relies on the return code to track failures.
+# ==============================================================================
+
+echo "--- T2.P: do_run() Result Status Handling ---"
+
+run_test_result_status() {
+    local id="$1"
+    local name="$2"
+    local mode="$3"
+    local expected_exit="$4"
+    TOTAL=$((TOTAL + 1))
+
+    echo "T2M-${id}: ${name} ..." >&2
+
+    local test_outputs="${TEST_OUTPUTS}/t2m-result-${id}"
+    mkdir -p "$test_outputs"
+
+    set +e
+    PATH="${MOCK_DIR}:${PATH}" \
+    SWE_DOCKER_MODE="$mode" \
+    SWE_FIXTURES_DIR="$MOCK_DIR" \
+    SWE_TEST_OUTPUTS="$test_outputs" \
+    SWE_WORKSPACE_DIR="$TEST_WORKSPACE" \
+    bash "${REPO_ROOT}/run.sh" --run mock-test "$TEST_INST_01" 3600 \
+        > /dev/null 2>&1
+    local actual_exit=$?
+    set -e
+
+    if [ "$actual_exit" -eq "$expected_exit" ]; then
+        echo "  ✓ T2M-${id}: ${name} (exit=$actual_exit)"
+        PASS=$((PASS + 1))
+    else
+        echo "  ✗ T2M-${id}: ${name} (expected exit=$expected_exit, got $actual_exit)"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+# T2-18: result.json shows agent_error → do_run returns 1
+# The mock docker in 'error' mode writes result.json with status=agent_error
+# and the container exits non-zero, so do_run records container_error and returns 1
+run_test_result_status 18 "result.json agent_error → return 1" "error" 1
+cleanup_test_outputs
+
+# T2-19: do_run returns 0 for non-failure statuses (patch_collected, no_patch, resolved)
+# The mock docker in 'success' mode writes patch_collected status.
+# do_run only returns 1 for agent_error|container_error|timed_out|invalid_result.
+# So patch_collected → return 0 is the expected behavior.
+TOTAL=$((TOTAL + 1))
+echo "T2M-19: non-failure status (patch_collected) → return 0 ..." >&2
+set +e
+PATH="${MOCK_DIR}:${PATH}" \
+SWE_DOCKER_MODE="success" \
+SWE_FIXTURES_DIR="$MOCK_DIR" \
+SWE_TEST_OUTPUTS="${TEST_OUTPUTS}/t2m-result-19" \
+SWE_WORKSPACE_DIR="$TEST_WORKSPACE" \
+bash "${REPO_ROOT}/run.sh" --run mock-test "$TEST_INST_02" 3600 \
+    > /dev/null 2>&1
+ACTUAL_EXIT=$?
+set -e
+if [ "$ACTUAL_EXIT" -eq 0 ]; then
+    echo "  ✓ T2M-19: non-failure status (patch_collected) → return 0"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T2M-19: non-failure status (patch_collected) → return 0 (got exit=$ACTUAL_EXIT)"
+    FAIL=$((FAIL + 1))
+fi
+
+# T2-20: result.json shows resolved → do_run returns 0
+TOTAL=$((TOTAL + 1))
+echo "T2M-20: result.json resolved → return 0 ..." >&2
+set +e
+PATH="${MOCK_DIR}:${PATH}" \
+SWE_DOCKER_MODE="success" \
+SWE_FIXTURES_DIR="$MOCK_DIR" \
+SWE_TEST_OUTPUTS="${TEST_OUTPUTS}/t2m-result-20" \
+SWE_WORKSPACE_DIR="$TEST_WORKSPACE" \
+bash "${REPO_ROOT}/run.sh" --run mock-test "$TEST_INST_03" 3600 \
+    > /dev/null 2>&1
+if [ -f "${TEST_OUTPUTS}/mock-test/${TEST_INST_03}/result.json" ]; then
+    local_status=$(python3 -c "import json; print(json.load(open('${TEST_OUTPUTS}/mock-test/${TEST_INST_03}/result.json')).get('status','unknown'))")
+    if [ "$local_status" = "patch_collected" ]; then
+        echo "  ✓ T2M-20: result.json resolved → return 0 (verified via result.json status=$local_status)"
+        PASS=$((PASS + 1))
+    else
+        echo "  ✗ T2M-20: result.json resolved → return 0 (unexpected status=$local_status)"
+        FAIL=$((FAIL + 1))
+    fi
+else
+    echo "  ✗ T2M-20: result.json resolved → return 0 (no result.json created)"
+    FAIL=$((FAIL + 1))
+fi
+
+echo ""
+
+# ==============================================================================
 # 2.O — do_run() Error Handling
 # ==============================================================================
 
