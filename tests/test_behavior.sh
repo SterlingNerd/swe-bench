@@ -604,3 +604,53 @@ echo "=== Behavioral Tests: ${PASS}/${TOTAL} passed, ${FAIL} failed ==="
 if [ "$FAIL" -gt 0 ]; then
     exit 1
 fi
+
+# ==============================================================================
+# T-B11: Smoke Test — Full Workflow with Simple Agent
+# ==============================================================================
+echo "--- T-B11: Smoke Test ---"
+
+# B11-01: smoke test agent bundle exists
+TOTAL=$((TOTAL + 1))
+[ -f "${REPO_ROOT}/agents/smoke-test/bundle/bin/smoke-agent" ] && pass "smoke test agent bundle exists" || fail_output "smoke agent bundle"
+
+# B11-02: smoke test instance definition exists
+TOTAL=$((TOTAL + 1))
+[ -f "${REPO_ROOT}/tests/smoke_test_instance.json" ] && pass "smoke test instance definition exists" || fail_output "smoke test instance"
+
+# B11-03: smoke test agent runs and produces output
+TOTAL=$((TOTAL + 1))
+SMOKE_TEST_ROOT=$(mktemp -d)
+trap 'rm -rf "$SMOKE_TEST_ROOT"' EXIT
+export SWE_OUTPUT_ROOT="$SMOKE_TEST_ROOT/outputs"
+mkdir -p "${SMOKE_TEST_ROOT}/outputs/smoke-test"
+
+set +e
+bash "${REPO_ROOT}/agents/smoke-test/bundle/bin/smoke-agent" "smoke__test-1" "smoke/test" "deadbeef" "print Hello world and nothing else" >/dev/null 2>&1
+smoke_rc=$?
+set -e
+[ "$smoke_rc" -eq 0 ] && pass "smoke test agent runs successfully" || fail_test "exit=0" 0 "$smoke_rc"
+
+# B11-04: smoke test produces patch.diff
+TOTAL=$((TOTAL + 1))
+[ -f "${SMOKE_TEST_ROOT}/outputs/smoke-test/smoke__test-1/patch.diff" ] && pass "smoke test produces patch.diff" || fail_output "patch.diff exists"
+
+# B11-05: smoke test produces result.json with correct status
+TOTAL=$((TOTAL + 1))
+if [ -f "${SMOKE_TEST_ROOT}/outputs/smoke-test/smoke__test-1/result.json" ]; then
+    python3 -c "import json; d=json.load(open('${SMOKE_TEST_ROOT}/outputs/smoke-test/smoke__test-1/result.json')); assert d['status']=='patch_collected'" 2>/dev/null && \
+        pass "smoke test result.json has patch_collected status" || fail_output "correct status in result.json"
+else
+    fail_output "result.json exists with correct status"
+fi
+
+# B11-06: smoke test output is "Hello world"
+TOTAL=$((TOTAL + 1))
+if [ -f "${SMOKE_TEST_ROOT}/outputs/smoke-test/smoke__test-1/output.txt" ]; then
+    OUTPUT=$(cat "${SMOKE_TEST_ROOT}/outputs/smoke-test/smoke__test-1/output.txt")
+    [ "$OUTPUT" = "Hello world" ] && pass "smoke test output is 'Hello world'" || fail_output "'Hello world'" "$OUTPUT"
+else
+    fail_output "output.txt exists with correct content"
+fi
+
+echo ""

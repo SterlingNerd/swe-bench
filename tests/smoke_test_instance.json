@@ -1,0 +1,1 @@
+[{"instance_id": "smoke__test-1", "repo": "smoke/test", "base_commit": "deadbeef", "problem_statement": "print Hello world and nothing else", "version": "1.0", "difficulty": "easy"}]
