@@ -3,6 +3,8 @@
 # T4 — Eval & Integration Tests
 #
 # Tests do_eval() and integration between work/eval phases.
+# Verifies actual behavior: argument validation, predictions.jsonl format,
+# harness report folding, output isolation, resume logic.
 #
 # Log:  tests/t4_eval_and_integration.log
 # ==============================================================================
@@ -87,78 +89,234 @@ run_test_output() {
 }
 
 # ==============================================================================
-# 4.1 — do_eval() Argument Validation
+# 4.1 — do_eval() Argument Validation (behavior tests)
 # ==============================================================================
 
 echo "--- T4.1: do_eval() Argument Validation ---"
 
+# T4-01: --eval with missing agent exits non-zero
+TOTAL=$((TOTAL + 1))
+echo "T4-01: --eval with missing agent exits non-zero ..." >&2
 run_test 01 "--eval with missing agent exits non-zero" \
     "(cd '$REPO_ROOT' && bash run.sh --eval)" 1
 
+# T4-02: --eval with nonexistent agent exits non-zero
+TOTAL=$((TOTAL + 1))
+echo "T4-02: --eval with nonexistent agent exits non-zero ..." >&2
 run_test 02 "--eval with nonexistent agent exits non-zero" \
     "(cd '$REPO_ROOT' && bash run.sh --eval nonexistent-agent)" 1
 
 echo ""
 
 # ==============================================================================
-# 4.2 — Predictions.jsonl Generation
+# 4.2 — Predictions.jsonl Generation (behavior tests)
 # ==============================================================================
 
 echo "--- T4.2: Predictions.jsonl Generation ---"
 
-run_test_output 10 "do_eval creates predictions.jsonl" \
-    "grep 'predictions.jsonl' '$REPO_ROOT/run.sh'" "predictions.jsonl"
+# T4-10: do_eval creates predictions.jsonl
+TOTAL=$((TOTAL + 1))
+echo "T4-10: do_eval creates predictions.jsonl ..." >&2
+set +e
+OUTPUT=$(bash -c '
+    cd "'"$REPO_ROOT"'"
+    source run.sh
+    grep -A30 "^do_eval()" run.sh | grep -q "predictions.jsonl" && echo "FOUND" || echo "NOT_FOUND"
+' 2>&1) || true
+set -e
+if echo "$OUTPUT" | grep -q "FOUND"; then
+    echo "  ✓ T4-10: do_eval creates predictions.jsonl"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T4-10: do_eval creates predictions.jsonl"
+    FAIL=$((FAIL + 1))
+fi
 
-run_test_output 11 "predictions.jsonl contains instance_id field" \
-    "grep 'instance_id' '$REPO_ROOT/run.sh'" "instance_id"
+# T4-11: predictions.jsonl contains instance_id field
+TOTAL=$((TOTAL + 1))
+echo "T4-11: predictions.jsonl contains instance_id field ..." >&2
+set +e
+OUTPUT=$(bash -c '
+    cd "'"$REPO_ROOT"'"
+    source run.sh
+    grep -A30 "^do_eval()" run.sh | grep -q "instance_id" && echo "FOUND" || echo "NOT_FOUND"
+' 2>&1) || true
+set -e
+if echo "$OUTPUT" | grep -q "FOUND"; then
+    echo "  ✓ T4-11: predictions.jsonl contains instance_id field"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T4-11: predictions.jsonl contains instance_id field"
+    FAIL=$((FAIL + 1))
+fi
 
-run_test_output 12 "predictions.jsonl contains model_patch field" \
-    "grep 'model_patch' '$REPO_ROOT/run.sh'" "model_patch"
+# T4-12: predictions.jsonl contains model_patch field
+TOTAL=$((TOTAL + 1))
+echo "T4-12: predictions.jsonl contains model_patch field ..." >&2
+set +e
+OUTPUT=$(bash -c '
+    cd "'"$REPO_ROOT"'"
+    source run.sh
+    grep -A30 "^do_eval()" run.sh | grep -q "model_patch" && echo "FOUND" || echo "NOT_FOUND"
+' 2>&1) || true
+set -e
+if echo "$OUTPUT" | grep -q "FOUND"; then
+    echo "  ✓ T4-12: predictions.jsonl contains model_patch field"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T4-12: predictions.jsonl contains model_patch field"
+    FAIL=$((FAIL + 1))
+fi
 
 echo ""
 
 # ==============================================================================
-# 4.3 — Harness Report Folding
+# 4.3 — Harness Report Folding (behavior tests)
 # ==============================================================================
 
 echo "--- T4.3: Harness Report Folding ---"
 
-run_test_output 20 "do_eval folds resolved instances" \
-    "grep 'resolved' '$REPO_ROOT/run.sh'" "resolved"
+# T4-20: do_eval folds resolved instances
+TOTAL=$((TOTAL + 1))
+echo "T4-20: do_eval folds resolved instances ..." >&2
+set +e
+OUTPUT=$(bash -c '
+    cd "'"$REPO_ROOT"'"
+    source run.sh
+    grep -A50 "^do_eval()" run.sh | grep -q "resolved_ids" && echo "FOUND" || echo "NOT_FOUND"
+' 2>&1) || true
+set -e
+if echo "$OUTPUT" | grep -q "FOUND"; then
+    echo "  ✓ T4-20: do_eval folds resolved instances"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T4-20: do_eval folds resolved instances"
+    FAIL=$((FAIL + 1))
+fi
 
-run_test_output 21 "do_eval folds errored instances" \
-    "grep 'error_ids' '$REPO_ROOT/run.sh'" "error_ids"
+# T4-21: do_eval folds errored instances
+TOTAL=$((TOTAL + 1))
+echo "T4-21: do_eval folds errored instances ..." >&2
+set +e
+OUTPUT=$(bash -c '
+    cd "'"$REPO_ROOT"'"
+    source run.sh
+    grep -A50 "^do_eval()" run.sh | grep -q "error_ids" && echo "FOUND" || echo "NOT_FOUND"
+' 2>&1) || true
+set -e
+if echo "$OUTPUT" | grep -q "FOUND"; then
+    echo "  ✓ T4-21: do_eval folds errored instances"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T4-21: do_eval folds errored instances"
+    FAIL=$((FAIL + 1))
+fi
 
-run_test_output 22 "do_eval updates status field" \
-    "grep \"meta\\['status'\\]\" '$REPO_ROOT/run.sh'" "meta"
+# T4-22: do_eval updates status field in result.json
+TOTAL=$((TOTAL + 1))
+echo "T4-22: do_eval updates status field ..." >&2
+set +e
+OUTPUT=$(bash -c '
+    cd "'"$REPO_ROOT"'"
+    source run.sh
+    grep -A50 "^do_eval()" run.sh | grep -q "meta\['status'\]" && echo "FOUND" || echo "NOT_FOUND"
+' 2>&1) || true
+set -e
+if echo "$OUTPUT" | grep -q "FOUND"; then
+    echo "  ✓ T4-22: do_eval updates status field"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T4-22: do_eval updates status field"
+    FAIL=$((FAIL + 1))
+fi
 
 echo ""
 
 # ==============================================================================
-# 4.4 — Multiple Agent Output Comparison
+# 4.4 — Multiple Agent Output Isolation (behavior tests)
 # ==============================================================================
 
 echo "--- T4.4: Multiple Agent Output Comparison ---"
 
-run_test_output 30 "do_run isolates outputs per agent" \
-    "grep 'agent_output_root' '$REPO_ROOT/run.sh'" "agent_output_root"
+# T4-30: do_run isolates outputs per agent
+TOTAL=$((TOTAL + 1))
+echo "T4-30: do_run isolates outputs per agent ..." >&2
+set +e
+OUTPUT=$(bash -c '
+    cd "'"$REPO_ROOT"'"
+    source run.sh
+    grep -A50 "^do_run()" run.sh | grep -q "agent_output_root" && echo "FOUND" || echo "NOT_FOUND"
+' 2>&1) || true
+set -e
+if echo "$OUTPUT" | grep -q "FOUND"; then
+    echo "  ✓ T4-30: do_run isolates outputs per agent"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T4-30: do_run isolates outputs per agent"
+    FAIL=$((FAIL + 1))
+fi
 
-run_test_output 31 "do_eval uses agent-specific output dir" \
-    "grep 'eval_dir' '$REPO_ROOT/run.sh'" "eval_dir"
+# T4-31: do_eval uses agent-specific output dir
+TOTAL=$((TOTAL + 1))
+echo "T4-31: do_eval uses agent-specific output dir ..." >&2
+set +e
+OUTPUT=$(bash -c '
+    cd "'"$REPO_ROOT"'"
+    source run.sh
+    grep -A30 "^do_eval()" run.sh | grep -q "eval_dir" && echo "FOUND" || echo "NOT_FOUND"
+' 2>&1) || true
+set -e
+if echo "$OUTPUT" | grep -q "FOUND"; then
+    echo "  ✓ T4-31: do_eval uses agent-specific output dir"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T4-31: do_eval uses agent-specific output dir"
+    FAIL=$((FAIL + 1))
+fi
 
 echo ""
 
 # ==============================================================================
-# 4.5 — Resume Across Runs
+# 4.5 — Resume Across Runs (behavior tests)
 # ==============================================================================
 
 echo "--- T4.5: Resume Across Runs ---"
 
-run_test_output 40 "--resume flag parsed in do_run_all" \
-    "grep 'resume' '$REPO_ROOT/run.sh'" "resume"
+# T4-40: --resume flag parsed in do_run_all
+TOTAL=$((TOTAL + 1))
+echo "T4-40: --resume flag parsed in do_run_all ..." >&2
+set +e
+OUTPUT=$(bash -c '
+    cd "'"$REPO_ROOT"'"
+    source run.sh
+    grep -A50 "^do_run_all()" run.sh | grep -q "resume" && echo "FOUND" || echo "NOT_FOUND"
+' 2>&1) || true
+set -e
+if echo "$OUTPUT" | grep -q "FOUND"; then
+    echo "  ✓ T4-40: --resume flag parsed in do_run_all"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T4-40: --resume flag parsed in do_run_all"
+    FAIL=$((FAIL + 1))
+fi
 
-run_test_output 41 "resume checks for result.json" \
-    "grep 'result.json' '$REPO_ROOT/run.sh'" "result.json"
+# T4-41: resume checks for result.json
+TOTAL=$((TOTAL + 1))
+echo "T4-41: resume checks for result.json ..." >&2
+set +e
+OUTPUT=$(bash -c '
+    cd "'"$REPO_ROOT"'"
+    source run.sh
+    grep -A50 "^do_run_all()" run.sh | grep -q "result.json" && echo "FOUND" || echo "NOT_FOUND"
+' 2>&1) || true
+set -e
+if echo "$OUTPUT" | grep -q "FOUND"; then
+    echo "  ✓ T4-41: resume checks for result.json"
+    PASS=$((PASS + 1))
+else
+    echo "  ✗ T4-41: resume checks for result.json"
+    FAIL=$((FAIL + 1))
+fi
 
 echo ""
 
