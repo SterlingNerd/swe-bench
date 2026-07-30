@@ -1073,56 +1073,11 @@ do_run() {
     wait "$logs_pid" 2>/dev/null || true
     elapsed=$(( $(date +%s) - started_at ))
 
-<<<<<<< HEAD
-    if [ "$docker_status" -eq 124 ]; then
-        docker rm -f "$container_name" >/dev/null 2>&1 || true
-        record_host_result "${instance_output_dir}/result.json" "timed_out" \
-            "$docker_status" "$elapsed"
-        echo "ERROR: ${agent}/${instance_id} timed out after ${timeout_sec}s."
-        return $docker_status
-    fi
-
-    if [ "$docker_status" -ne 0 ]; then
-        docker rm -f "$container_name" >/dev/null 2>&1 || true
-        record_host_result "${instance_output_dir}/result.json" "container_error" \
-            "$docker_status" "$elapsed"
-        echo "ERROR: ${agent}/${instance_id} container exited with ${docker_status}."
-        return $docker_status
-    fi
-
-    # Copy outputs out before removing the container.
-    # Check docker inspect to distinguish violent deaths from clean exits.
-    local container_state=""
-    if ! container_state=$(docker inspect --format '{{.State.Status}}' "$container_name" 2>/dev/null); then
-        echo "  WARNING: Cannot inspect container state, attempting copy anyway."
-    fi
-
-    mkdir -p "$instance_output_dir"
-    local cp_ok=0
-    local cp_tmp
-    cp_tmp=$(mktemp -d)
-    if docker cp "${container_name}:/workspace/outputs/${agent}/${instance_id}" \
-                 "${cp_tmp}/"; then
-        # Flatten: docker cp nests the instance dir; move its contents into place.
-        if [ -d "${cp_tmp}/${instance_id}" ]; then
-            mv "${cp_tmp}/${instance_id}/"* "${instance_output_dir}/" || {
-                echo "  WARNING: Failed to flatten output files."
-            }
-        fi
-        # Verify that the copy actually produced output files.
-        if [ -f "${instance_output_dir}/result.json" ] || [ -f "${instance_output_dir}/patch.diff" ]; then
-            echo "  Copied outputs from container."
-            cp_ok=1
-        else
-            echo "  WARNING: Copy succeeded but no output files found in container."
-        fi
-=======
     local state_file="${attempt_dir}/container-state.json" state_tmp inspect_ok=0
     state_tmp=$(mktemp "${attempt_dir}/.container-state.XXXXXX")
     if docker inspect --format '{{json .State}}' "$cid" > "$state_tmp" 2>/dev/null; then
         mv "$state_tmp" "$state_file"
         inspect_ok=1
->>>>>>> f36b8d09 (feat: harden benchmark run lifecycle)
     else
         rm -f "$state_tmp"
         echo "  WARNING: Container state could not be captured; retaining ${container_name}."
@@ -1230,21 +1185,10 @@ do_run_all() {
             *)         echo "Unknown option: $1"; return 2 ;;
         esac
     done
-<<<<<<< HEAD
-
-    # Validate timeout is numeric
-    if ! [[ "$timeout_sec" =~ ^[0-9]+$ ]]; then
-        echo "ERROR: Timeout must be a non-negative integer, got '${timeout_sec}'."
-        return 1
-    fi
-
-    # Validate agent exists
-=======
     if ! [[ "$timeout_sec" =~ ^[0-9]+$ ]]; then
         echo "ERROR: Timeout must be a non-negative integer, got '${timeout_sec}'."
         return 2
     fi
->>>>>>> f36b8d09 (feat: harden benchmark run lifecycle)
     if [ ! -d "${AGENTS_DIR}/${agent}" ]; then
         echo "ERROR: Agent '${agent}' not found."
         return 1
@@ -1314,40 +1258,11 @@ PY
         echo "=============================================================================="
         echo "  [WORK] Processing: ${instance_id}"
         echo "=============================================================================="
-<<<<<<< HEAD
-        # Wait for any running swe containers to finish
-        local wait_count=0
-        while docker ps --format "{{.Names}}" | grep -q "swe_${agent}_"; do
-            if [ $wait_count -gt 0 ] && [ $((wait_count % 6)) -eq 0 ]; then
-                echo "  Waiting for container to finish... (${wait_count}s)"
-            fi
-            sleep 1
-            wait_count=$((wait_count + 1))
-            if [ $wait_count -gt 3600 ]; then
-                echo "  ERROR: Timeout waiting for container, killing all swe containers"
-                local to_kill
-                to_kill=$(docker ps --format "{{.Names}}" | grep "swe_${agent}_" || true)
-                if [ -n "$to_kill" ]; then
-                    while read -r c; do release_container "$c"; done <<< "$to_kill"
-                fi
-                break
-            fi
-        done
-        # Double check — release any remaining containers/endpoints from previous runs
-        local remaining
-        remaining=$(docker ps --format "{{.Names}}" | grep "swe_${agent}_" || true)
-        if [ -n "$remaining" ]; then
-            while read -r c; do release_container "$c"; done <<< "$remaining"
-        fi
-        # Resume: skip instances that already have a result.json
-        if [ "$resume" = 1 ] && [ -f "${agent_output_root}/${instance_id}/result.json" ]; then
-=======
         local task_state
         task_state=$(python3 "$ARTIFACT_TOOL" task-state \
             --run-dir "$run_dir" --instance-id "$instance_id") || { failed=$((failed + 1)); continue; }
         if [ "$resume" -eq 1 ] && [ "$task_state" != "pending" ]; then
             echo "  Skipping manifest task with existing attempt state: ${task_state}"
->>>>>>> f36b8d09 (feat: harden benchmark run lifecycle)
             skipped=$((skipped + 1))
             continue
         fi
