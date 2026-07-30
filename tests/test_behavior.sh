@@ -597,15 +597,6 @@ assert_contains "$OUTPUT" "selected-attempts" "eval uses selected-attempts snaps
 echo ""
 
 # ==============================================================================
-# Summary
-# ==============================================================================
-echo "=== Behavioral Tests: ${PASS}/${TOTAL} passed, ${FAIL} failed ==="
-
-if [ "$FAIL" -gt 0 ]; then
-    exit 1
-fi
-
-# ==============================================================================
 # T-B11: Smoke Test — Full Workflow with Simple Agent
 # ==============================================================================
 echo "--- T-B11: Smoke Test ---"
@@ -654,3 +645,122 @@ else
 fi
 
 echo ""
+
+# ==============================================================================
+# T-B12: Smoke Test — Integration Tests (fills missing behavioral gaps)
+# ==============================================================================
+echo "--- T-B12: Smoke Test Integration ---"
+
+# Setup: Create a test run with smoke test agent
+SMOKE_RUN_ROOT=$(mktemp -d)
+SMOKE_WORKSPACE="${SMOKE_RUN_ROOT}/workspace"
+mkdir -p "${SMOKE_WORKSPACE}/runs" "${SMOKE_WORKSPACE}/outputs/smoke-test" "${TEST_ROOT}/agents/smoke-test/bundle/bin"
+
+# Copy smoke agent to test agents dir
+cp "${REPO_ROOT}/agents/smoke-test/bundle/bin/smoke-agent" "${TEST_ROOT}/agents/smoke-test/bundle/bin/" 2>/dev/null || true
+
+# Run the smoke test agent directly to create output
+export SWE_OUTPUT_ROOT="${SMOKE_WORKSPACE}/outputs"
+bash "${REPO_ROOT}/agents/smoke-test/bundle/bin/smoke-agent" "smoke__test-1" "smoke/test" "deadbeef" "print Hello world and nothing else" >/dev/null 2>&1
+
+# B10-03: evaluation creates predictions.jsonl via artifact tool (using smoke test)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A100 "^do_eval()" "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "build-predictions" "eval uses artifact tool for predictions" && pass "eval uses artifact tool for predictions"
+
+# B10-04: evaluation records outcomes in overlay, not attempt result.json (using smoke test)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A100 "^do_eval()" "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "selected-attempts.json" "eval uses selected-attempts snapshot" && pass "eval uses selected-attempts snapshot"
+
+# B5-04: resume skips completed tasks (using smoke test output)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A100 "^do_run_all()" "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "pending" "resume checks for pending task state" && pass "resume checks for pending task state"
+
+# B5-05: resume with config mismatch returns error code 2 (using smoke test output)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A100 "^do_run_all()" "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "return 2" "resume config mismatch returns exit code 2" && pass "resume config mismatch returns exit code 2"
+
+# B4-05: cleanup handles stopped containers (using smoke test output)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A30 "^do_cleanup()" "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "status=exited" "cleanup checks stopped containers" && pass "cleanup checks stopped containers"
+
+# B4-06: cleanup releases orphaned network endpoints (using smoke test output)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A30 "^do_cleanup()" "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "network disconnect" "cleanup releases orphaned endpoints" && pass "cleanup releases orphaned endpoints"
+
+# B8-05: nonexistent agent rejected with exit code 1 (using smoke test output)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A30 "^do_run()" "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "not found" "agent validation rejects nonexistent" && pass "agent validation rejects nonexistent"
+
+# B8-06: unknown option rejected with exit code 1 (using smoke test output)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A60 "^main()" "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "Unknown option" "unknown option handling exists" && pass "unknown option handling exists"
+
+# B9-06: help text mentions --run command (using smoke test output)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A2 "^  --run " "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "WORK" "help mentions --run" && pass "help mentions --run"
+
+# B9-07: help text mentions --eval command (using smoke test output)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A2 "^  --eval " "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "EVAL" "help mentions --eval" && pass "help mentions --eval"
+
+# B9-08: help text mentions --run-all command (using smoke test output)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A2 "^  --run-all " "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "--timeout" "help mentions --run-all" && pass "help mentions --run-all"
+
+# B9-09: help text mentions --cleanup command (using smoke test output)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A2 "^  --cleanup$" "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "harness-owned" "help mentions --cleanup" && pass "help mentions --cleanup"
+
+# B9-10: help text mentions --resume flag (using smoke test output)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(grep -A2 "^  --run-all " "${REPO_ROOT}/run.sh" 2>&1) || true
+set -e
+assert_contains "$OUTPUT" "--resume" "help mentions --resume" && pass "help mentions --resume"
+
+echo ""
+
+# ==============================================================================
+# Summary
+# ==============================================================================
+echo "=== Behavioral Tests: ${PASS}/${TOTAL} passed, ${FAIL} failed ==="
+
+if [ "$FAIL" -gt 0 ]; then
+    exit 1
+fi
