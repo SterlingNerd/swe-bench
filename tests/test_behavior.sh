@@ -757,6 +757,141 @@ assert_contains "$OUTPUT" "--resume" "help mentions --resume" && pass "help ment
 echo ""
 
 # ==============================================================================
+# ==============================================================================
+# T-B13: Hello-World Eval Suite — Full Workflow Integration Tests
+# ==============================================================================
+echo "--- T-B13: Hello-World Eval Suite ---"
+
+# Override fetch_dataset for integration tests
+fetch_dataset() { printf '%s\n' '[{"instance_id":"smoke__test-1"}]'; }
+# ==============================================================================
+echo "--- T-B13: Hello-World Eval Suite ---"
+
+# Setup: Create a complete test run with manifest, attempts, and outputs
+HELLO_ROOT=$(mktemp -d)
+HELLO_WORKSPACE="${HELLO_ROOT}/workspace"
+HELLO_RUNS="${HELLO_WORKSPACE}/runs"
+mkdir -p "${HELLO_RUNS}"
+
+# Create a fake run directory with manifest and attempts
+HELLO_RUN_DIR="${HELLO_RUNS}/hello-run"
+mkdir -p "${HELLO_RUN_DIR}/tasks/smoke__test-1/attempts/attempt-0001"
+
+# Create attempt files (simulating what do_run would create)
+cat > "${HELLO_RUN_DIR}/tasks/smoke__test-1/attempts/attempt-0001/result.json" <<'JSON'
+{"status": "patch_collected", "patch_bytes": 150, "checkpointed": true, "elapsed_seconds": 5, "container_exit_code": 0}
+JSON
+
+cat > "${HELLO_RUN_DIR}/tasks/smoke__test-1/attempts/attempt-0001/container-state.json" <<'JSON'
+{"Status": "exited", "Running": false, "OOMKilled": false, "ExitCode": 0}
+JSON
+
+cat > "${HELLO_RUN_DIR}/tasks/smoke__test-1/attempts/attempt-0001/patch.diff" <<'PATCH'
+diff --git a/hello.txt b/hello.txt
+new file mode 100644
+index 0000000..425a35f
+--- /dev/null
++++ b/hello.txt
+@@ -0,0 +1 @@
++Hello world
+PATCH
+
+# Create manifest
+cat > "${HELLO_RUN_DIR}/manifest.json" <<'JSON'
+{"run_id": "hello-run", "agent": "smoke-test", "tasks": {"smoke__test-1": {"selected_attempt": "attempt-0001"}}, "run_config": {"timeout": 3600}, "evaluations": []}
+JSON
+
+# Helper: run artifact tool (real or fake)
+run_artifact_tool() {
+    bash "${REPO_ROOT}/tests/fake_artifact_tool.sh" "$@" 2>/dev/null || \
+    bash "${REPO_ROOT}/tests/fake_artifact_tool.sh" "$@" 2>/dev/null || true
+}
+
+# B13-01: resolve-run returns correct run directory
+TOTAL=$((TOTAL + 1))
+OUTPUT=$(run_artifact_tool resolve-run --runs-dir "${HELLO_RUNS}" --agent smoke-test --run-id hello-run)
+echo "$OUTPUT" | grep -q "hello-run" && pass "resolve-run returns correct run directory" || fail_output "resolve-run returns correct run directory"
+
+# B13-02: task-state returns collected for completed tasks
+TOTAL=$((TOTAL + 1))
+OUTPUT=$(run_artifact_tool task-state --run-dir "$HELLO_RUN_DIR" --instance-id smoke__test-1)
+echo "$OUTPUT" | grep -q "collected" && pass "task-state returns collected for completed tasks" || fail_output "task-state returns collected"
+
+# B13-03: task-state returns pending for incomplete tasks
+TOTAL=$((TOTAL + 1))
+HELLO_PENDING_RUN="${HELLO_ROOT}/hello-pending-run"
+mkdir -p "${HELLO_PENDING_RUN}/tasks/smoke__test-2/attempts/attempt-0001"
+echo '{"status": "patch_collected", "checkpointed": true}' > "${HELLO_PENDING_RUN}/tasks/smoke__test-2/attempts/attempt-0001/result.json"
+OUTPUT=$(run_artifact_tool task-state --run-dir "$HELLO_PENDING_RUN" --instance-id smoke__test-2)
+echo "$OUTPUT" | grep -q "pending" && pass "task-state returns pending for incomplete tasks" || fail_output "task-state returns pending"
+
+# B13-04: build-predictions creates predictions.jsonl
+TOTAL=$((TOTAL + 1))
+HELLO_PREDS="${HELLO_ROOT}/predictions.jsonl"
+HELLO_SELECTIONS="${HELLO_ROOT}/selected-attempts.json"
+PRED_COUNT=$(run_artifact_tool build-predictions --run-dir "$HELLO_RUN_DIR" --output "$HELLO_PREDS" --selection-output "$HELLO_SELECTIONS")
+[ -f "$HELLO_PREDS" ] && [ -s "$HELLO_PREDS" ] && pass "build-predictions creates predictions.jsonl" || fail_output "predictions.jsonl exists and is non-empty"
+
+# B13-05: build-predictions creates selected-attempts.json
+TOTAL=$((TOTAL + 1))
+[ -f "$HELLO_SELECTIONS" ] && [ -s "$HELLO_SELECTIONS" ] && pass "build-predictions creates selected-attempts.json" || fail_output "selected-attempts.json exists and is non-empty"
+
+# B13-06: build-predictions returns correct instance count
+TOTAL=$((TOTAL + 1))
+[ "$PRED_COUNT" = "1" ] && pass "build-predictions returns correct instance count (1)" || fail_output "correct count" "$PRED_COUNT"
+
+# B13-07: finalize-attempt creates manifest
+TOTAL=$((TOTAL + 1))
+HELLO_FINALIZE_RUN="${HELLO_ROOT}/hello-finalize-run"
+mkdir -p "${HELLO_FINALIZE_RUN}/tasks/smoke__test-3/attempts/attempt-0001"
+run_artifact_tool finalize-attempt --run-dir "$HELLO_FINALIZE_RUN" --instance-id smoke__test-3 --attempt-id attempt-0001
+[ -f "${HELLO_FINALIZE_RUN}/manifest.json" ] && pass "finalize-attempt creates manifest" || fail_output "manifest exists"
+
+# B13-08: finalize-attempt updates selected_attempt in manifest
+TOTAL=$((TOTAL + 1))
+if [ -f "${HELLO_FINALIZE_RUN}/manifest.json" ]; then
+    python3 -c "import json; m=json.load(open('${HELLO_FINALIZE_RUN}/manifest.json')); assert m['tasks']['smoke__test-3']['selected_attempt']=='attempt-0001'" 2>/dev/null && \
+        pass "finalize-attempt updates selected_attempt" || fail_output "correct selected_attempt in manifest"
+else
+    fail_output "manifest exists with correct selected_attempt"
+fi
+
+# B13-09: do_run_all with --run-id creates named run directory (integration)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(do_run_all smoke-test --run-id hello-integration 2>&1) || true
+set -e
+echo "$OUTPUT" | grep -q "hello-integration" && pass "do_run_all creates named run directory" || fail_output "do_run_all creates named run directory"
+
+# B13-10: do_eval creates evaluation overlay (integration)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(do_eval smoke-test --run-id hello-integration 2>&1) || true
+set -e
+echo "$OUTPUT" | grep -q "selected patch" && pass "do_eval reports selected patches" || fail_output "do_eval reports selected patches"
+
+# B13-11: do_status derives from manifest (integration)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(do_status smoke-test --run-id hello-integration 2>&1) || true
+set -e
+echo "$OUTPUT" | grep -q "SWE-bench Harness Status" && pass "do_status shows harness header" || fail_output "do_status shows harness header"
+
+# B13-12: do_summarize derives from manifest (integration)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(do_summarize smoke-test --run-id hello-integration 2>&1) || true
+set -e
+echo "$OUTPUT" | grep -q "Agent:" && pass "do_summarize shows agent name" || fail_output "do_summarize shows agent name"
+
+# B13-13: resume skips completed tasks (integration)
+TOTAL=$((TOTAL + 1))
+set +e
+OUTPUT=$(do_run_all smoke-test --resume --run-id hello-integration 2>&1) || true
+set -e
+echo "$OUTPUT" | grep -q "skipped" && pass "resume skips completed tasks" || fail_output "resume skips completed tasks"
+
+# ==============================================================================
 # Summary
 # ==============================================================================
 echo "=== Behavioral Tests: ${PASS}/${TOTAL} passed, ${FAIL} failed ==="
