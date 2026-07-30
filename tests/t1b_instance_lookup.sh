@@ -211,7 +211,7 @@ echo "T1b-10: get_instance returns data for valid instance ..." >&2
 set +e
 OUTPUT=$(cd "$REPO_ROOT" && bash run.sh --list astropy__astropy-7166 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "astropy__astropy-7166"; then
+if check_output "$OUTPUT" "astropy__astropy-7166"; then
     echo "  ✓ T1b-10: get_instance returns data for valid instance"
     PASS=$((PASS + 1))
 else
@@ -225,7 +225,7 @@ echo "T1b-11: get_instance returns correct instance data ..." >&2
 set +e
 OUTPUT=$(cd "$REPO_ROOT" && bash run.sh --list astropy__astropy-7166 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "astropy"; then
+if check_output "$OUTPUT" "astropy"; then
     echo "  ✓ T1b-11: get_instance returns correct instance data"
     PASS=$((PASS + 1))
 else
@@ -239,7 +239,7 @@ echo "T1b-12: get_instance errors on missing instance ..." >&2
 set +e
 OUTPUT=$(cd "$REPO_ROOT" && bash run.sh --list nonexistent__instance-99999 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "Total: 0"; then
+if check_output "$OUTPUT" "Total: 0"; then
     echo "  ✓ T1b-12: get_instance errors on missing instance"
     PASS=$((PASS + 1))
 else
@@ -253,7 +253,7 @@ echo "T1b-13: get_instance returns full instance dict ..." >&2
 set +e
 OUTPUT=$(cd "$REPO_ROOT" && bash run.sh --list astropy__astropy-7336 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "astropy__astropy-7336"; then
+if check_output "$OUTPUT" "astropy__astropy-7336"; then
     echo "  ✓ T1b-13: get_instance returns full instance dict"
     PASS=$((PASS + 1))
 else
@@ -290,7 +290,7 @@ echo "T1b-20: --list shows instance IDs ..." >&2
 set +e
 OUTPUT=$(cd "$REPO_ROOT" && bash run.sh --list 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "__"; then
+if check_output "$OUTPUT" "__"; then
     echo "  ✓ T1b-20: --list shows instance IDs"
     PASS=$((PASS + 1))
 else
@@ -304,7 +304,7 @@ echo "T1b-21: --list shows repo names ..." >&2
 set +e
 OUTPUT=$(cd "$REPO_ROOT" && bash run.sh --list 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "django\|flask"; then
+if check_output "$OUTPUT" "django|flask"; then
     echo "  ✓ T1b-21: --list shows repo names"
     PASS=$((PASS + 1))
 else
@@ -318,7 +318,7 @@ echo "T1b-22: --list shows version info ..." >&2
 set +e
 OUTPUT=$(cd "$REPO_ROOT" && bash run.sh --list 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -qE "v[0-9]"; then
+if check_output "$OUTPUT" "v[0-9]"; then
     echo "  ✓ T1b-22: --list shows version info"
     PASS=$((PASS + 1))
 else
@@ -347,7 +347,7 @@ echo "T1b-24: --list shows total count ..." >&2
 set +e
 OUTPUT=$(cd "$REPO_ROOT" && bash run.sh --list 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -qE "[0-9]+ instances?"; then
+if check_output "$OUTPUT" "[0-9]+ instances?"; then
     echo "  ✓ T1b-24: --list shows total count"
     PASS=$((PASS + 1))
 else

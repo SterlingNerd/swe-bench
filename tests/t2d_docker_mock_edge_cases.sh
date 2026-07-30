@@ -164,7 +164,7 @@ OUTPUT=$(bash -c '
     grep -A50 "^do_run()" run.sh | grep -q "docker inspect" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T2d-10: do_run inspects container state after run"
     PASS=$((PASS + 1))
 else
@@ -182,7 +182,7 @@ OUTPUT=$(bash -c '
     grep -A50 "^do_run()" run.sh | grep -q "container_state" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T2d-11: do_run checks container_state variable"
     PASS=$((PASS + 1))
 else
@@ -208,7 +208,7 @@ OUTPUT=$(bash -c '
     grep -A50 "^do_run()" run.sh | grep -q "chown" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T2d-20: do_run fixes ownership after copy"
     PASS=$((PASS + 1))
 else
@@ -234,7 +234,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^summarize_agent()" run.sh | grep -q "patch_bytes" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T2d-30: summarize_agent uses patch_bytes"
     PASS=$((PASS + 1))
 else
@@ -252,7 +252,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^show_agent_status()" run.sh | grep -q "no_patch" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T2d-31: show_agent_status tracks no_patch status"
     PASS=$((PASS + 1))
 else
@@ -278,7 +278,7 @@ OUTPUT=$(bash -c '
     grep -A100 "^do_run_all()" run.sh | grep -q "do_run" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T2d-40: do_run_all calls do_run for each instance"
     PASS=$((PASS + 1))
 else
@@ -296,7 +296,7 @@ OUTPUT=$(bash -c '
     grep -A100 "^do_run_all()" run.sh | grep -q "count=" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T2d-41: do_run_all tracks count/skipped/failed counters"
     PASS=$((PASS + 1))
 else
@@ -314,7 +314,7 @@ OUTPUT=$(bash -c '
     grep -A100 "^do_run_all()" run.sh | grep -q "failed=" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T2d-42: do_run_all increments failed counter on failure"
     PASS=$((PASS + 1))
 else

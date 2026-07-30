@@ -173,7 +173,7 @@ OUTPUT=$(PATH="$MOCK_DIR:$PATH" SWE_DOCKER_MODE=success bash -c '
     echo $?
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "0"; then
+if check_output "$OUTPUT" "0"; then
     echo "  ✓ T0-16: check_storage returns 0 when disk at 50% and threshold is 80"
     PASS=$((PASS + 1))
 else
@@ -216,7 +216,7 @@ OUTPUT=$(bash -c '
     echo $?
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "0"; then
+if check_output "$OUTPUT" "0"; then
     echo "  ✓ T0-18: check_storage returns 0 when disk usage < MAX_STORAGE_PCT"
     PASS=$((PASS + 1))
 else
@@ -243,7 +243,7 @@ OUTPUT=$(bash -c '
     echo "DOCKER_READY=${DOCKER_READY:-unset}"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "DOCKER_READY=1"; then
+if check_output "$OUTPUT" "DOCKER_READY=1"; then
     echo "  ✓ T0-19: ensure_docker sets DOCKER_READY=1 when docker works"
     PASS=$((PASS + 1))
 else
@@ -262,7 +262,7 @@ OUTPUT=$(bash -c '
     echo $?
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "0"; then
+if check_output "$OUTPUT" "0"; then
     echo "  ✓ T0-20: require_docker returns 0 when docker info succeeds"
     PASS=$((PASS + 1))
 else
@@ -288,7 +288,7 @@ OUTPUT=$(bash -c '
     get_arch
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "x86_64"; then
+if check_output "$OUTPUT" "x86_64"; then
     echo "  ✓ T0-21: get_arch returns x86_64 on x86_64 system"
     PASS=$((PASS + 1))
 else
@@ -306,7 +306,7 @@ OUTPUT=$(bash -c '
     instance_to_image "django__django-11039"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "swebench/sweb.eval.x86_64.django_1776_django-11039:latest"; then
+if check_output "$OUTPUT" "swebench/sweb.eval.x86_64.django_1776_django-11039:latest"; then
     echo "  ✓ T0-22: instance_to_image produces correct image name"
     PASS=$((PASS + 1))
 else
@@ -324,7 +324,7 @@ OUTPUT=$(bash -c '
     SWEBENCH_REGISTRY="custom.registry.io" instance_to_image "django__django-11039"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "custom.registry.io"; then
+if check_output "$OUTPUT" "custom.registry.io"; then
     echo "  ✓ T0-23: instance_to_image uses custom SWEBENCH_REGISTRY"
     PASS=$((PASS + 1))
 else
@@ -421,7 +421,7 @@ OUTPUT=$(bash -c '
     echo $?
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "0"; then
+if check_output "$OUTPUT" "0"; then
     echo "  ✓ T0-30: release_container returns 0 for non-existent container"
     PASS=$((PASS + 1))
 else
@@ -449,7 +449,7 @@ OUTPUT=$(bash -c '
     echo $?
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "0"; then
+if check_output "$OUTPUT" "0"; then
     echo "  ✓ T0-34: save_image_to_cache returns 0 when cache dir unset"
     PASS=$((PASS + 1))
 else
@@ -491,7 +491,7 @@ OUTPUT=$(bash -c '
     echo "$local_safe_name"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "swebench_sweb.eval.x86_64.django_1776_django-11039_latest"; then
+if check_output "$OUTPUT" "swebench_sweb.eval.x86_64.django_1776_django-11039_latest"; then
     echo "  ✓ T0-36: save_image_to_cache sanitizes slashes/colons in image name"
     PASS=$((PASS + 1))
 else

@@ -10,7 +10,15 @@
 check_output() {
     local output="$1"
     local pattern="$2"
+    # Write output to a temp file to avoid subshell issues
+    local tmpfile
+    tmpfile=$(mktemp)
+    printf '%s\n' "$output" > "$tmpfile"
     local count
-    count=$(printf '%s\n' "$output" | grep -cF -- "$pattern" 2>/dev/null) || true
-    [ "${count:-0}" -gt 0 ]
+    # Try grep -E first (regex), then grep -F (fixed string)
+    count=$(grep -cE -- "$pattern" "$tmpfile" 2>/dev/null) || \
+    count=$(grep -cF -- "$pattern" "$tmpfile" 2>/dev/null) || \
+    count=0
+    rm -f "$tmpfile"
+    [ "$count" -gt 0 ]
 }
