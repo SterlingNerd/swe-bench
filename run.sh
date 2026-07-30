@@ -212,10 +212,15 @@ do_cleanup() {
             sort -u
     )
     if [ ${#images[@]} -gt 0 ]; then
+        local removed=0
         for img in "${images[@]}"; do
-            docker rmi --force "$img" 2>/dev/null || true
+            if docker rmi --force "$img" >/dev/null 2>&1; then
+                removed=$((removed + 1))
+            else
+                echo "  WARNING: Could not remove image $img"
+            fi
         done
-        echo "Removed ${#images[@]} SWE-bench image(s)."
+        echo "Removed ${removed} SWE-bench image(s)."
     fi
 
     if [ ${#containers[@]} -eq 0 ] && [ ${#images[@]} -eq 0 ]; then
@@ -747,7 +752,9 @@ do_run() {
                  "${cp_tmp}/"; then
         # Flatten: docker cp nests the instance dir; move its contents into place.
         if [ -d "${cp_tmp}/${instance_id}" ]; then
-            mv "${cp_tmp}/${instance_id}/"* "${instance_output_dir}/" 2>/dev/null || true
+            mv "${cp_tmp}/${instance_id}/"* "${instance_output_dir}/" || {
+                echo "  WARNING: Failed to flatten output files."
+            }
         fi
         # Verify that the copy actually produced output files.
         if [ -f "${instance_output_dir}/result.json" ] || [ -f "${instance_output_dir}/patch.diff" ]; then
@@ -860,12 +867,20 @@ for inst in data:
             wait_count=$((wait_count + 1))
             if [ $wait_count -gt 3600 ]; then
                 echo "  ERROR: Timeout waiting for container, killing all swe containers"
-                docker ps --format "{{.Names}}" | grep "swe_${agent}_" | while read -r c; do release_container "$c"; done 2>/dev/null || true
+                local to_kill
+                to_kill=$(docker ps --format "{{.Names}}" | grep "swe_${agent}_" || true)
+                if [ -n "$to_kill" ]; then
+                    while read -r c; do release_container "$c"; done <<< "$to_kill"
+                fi
                 break
             fi
         done
         # Double check — release any remaining containers/endpoints from previous runs
-        docker ps --format "{{.Names}}" | grep "swe_${agent}_" | while read -r c; do release_container "$c"; done 2>/dev/null || true
+        local remaining
+        remaining=$(docker ps --format "{{.Names}}" | grep "swe_${agent}_" || true)
+        if [ -n "$remaining" ]; then
+            while read -r c; do release_container "$c"; done <<< "$remaining"
+        fi
         # Resume: skip instances that already have a result.json
         if [ "$resume" = 1 ] && [ -f "${agent_output_root}/${instance_id}/result.json" ]; then
             skipped=$((skipped + 1))

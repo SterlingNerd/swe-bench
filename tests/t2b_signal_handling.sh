@@ -137,7 +137,7 @@ OUTPUT=$(bash -c '
     echo "STOPPED=${STOPPED:-unset}"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "STOPPED=1"; then
+if check_output "$OUTPUT" "STOPPED=1"; then
     echo "  ✓ T2b-01: stop_running_containers sets STOPPED flag"
     PASS=$((PASS + 1))
 else
@@ -157,7 +157,7 @@ OUTPUT=$(bash -c '
     echo $?
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "0"; then
+if check_output "$OUTPUT" "0"; then
     echo "  ✓ T2b-02: stop_running_containers handles empty container list gracefully"
     PASS=$((PASS + 1))
 else
@@ -203,7 +203,7 @@ OUTPUT=$(bash -c '
     trap -p INT
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "on_interrupt"; then
+if check_output "$OUTPUT" "on_interrupt"; then
     echo "  ✓ T2b-10: INT trap is set to on_interrupt"
     PASS=$((PASS + 1))
 else
@@ -221,7 +221,7 @@ OUTPUT=$(bash -c '
     trap -p TERM
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "on_interrupt"; then
+if check_output "$OUTPUT" "on_interrupt"; then
     echo "  ✓ T2b-11: TERM trap is set to on_interrupt"
     PASS=$((PASS + 1))
 else
@@ -239,7 +239,7 @@ OUTPUT=$(bash -c '
     trap -p EXIT
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "stop_running_containers"; then
+if check_output "$OUTPUT" "stop_running_containers"; then
     echo "  ✓ T2b-12: EXIT trap is set to stop_running_containers"
     PASS=$((PASS + 1))
 else
@@ -265,7 +265,7 @@ OUTPUT=$(bash -c '
     on_interrupt
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "^C received\|shutting down"; then
+if check_output "$OUTPUT" "^C received|shutting down"; then
     echo "  ✓ T2b-20: on_interrupt prints interrupt message"
     PASS=$((PASS + 1))
 else
@@ -284,7 +284,7 @@ OUTPUT=$(bash -c '
     SWE_DOCKER_MODE=success on_interrupt 2>&1
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "Cleanup complete\|STOPPED"; then
+if check_output "$OUTPUT" "Cleanup complete|STOPPED"; then
     echo "  ✓ T2b-21: on_interrupt calls stop_running_containers"
     PASS=$((PASS + 1))
 else

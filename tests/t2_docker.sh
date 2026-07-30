@@ -284,7 +284,7 @@ set +e
 OUTPUT="$(cd "$REPO_ROOT" && SWE_WORKSPACE_DIR="$TEST_WS_STATUS" bash run.sh --status status-agent 2>&1)"
 ACTUAL_EXIT=$?
 set -e
-if echo "$OUTPUT" | grep -q "resolved"; then
+if check_output "$OUTPUT" "resolved"; then
     echo "  ✓ T2-48: resolved shows green ✓"
     PASS=$((PASS + 1))
 else
@@ -302,7 +302,7 @@ set +e
 OUTPUT="$(cd "$REPO_ROOT" && SWE_WORKSPACE_DIR="$TEST_WS_STATUS" bash run.sh --status status-agent 2>&1)"
 ACTUAL_EXIT=$?
 set -e
-if echo "$OUTPUT" | grep -q "failed"; then
+if check_output "$OUTPUT" "failed"; then
     echo "  ✓ T2-49: failed shows red ✗"
     PASS=$((PASS + 1))
 else
@@ -320,7 +320,7 @@ set +e
 OUTPUT="$(cd "$REPO_ROOT" && SWE_WORKSPACE_DIR="$TEST_WS_STATUS" bash run.sh --status status-agent 2>&1)"
 ACTUAL_EXIT=$?
 set -e
-if echo "$OUTPUT" | grep -q "no patch"; then
+if check_output "$OUTPUT" "no patch"; then
     echo "  ✓ T2-50: no_patch shows yellow —"
     PASS=$((PASS + 1))
 else
@@ -338,7 +338,7 @@ set +e
 OUTPUT="$(cd "$REPO_ROOT" && SWE_WORKSPACE_DIR="$TEST_WS_STATUS" bash run.sh --status status-agent 2>&1)"
 ACTUAL_EXIT=$?
 set -e
-if echo "$OUTPUT" | grep -q "timed out"; then
+if check_output "$OUTPUT" "timed out"; then
     echo "  ✓ T2-51: timed_out shows ⌛"
     PASS=$((PASS + 1))
 else
@@ -356,7 +356,7 @@ set +e
 OUTPUT="$(cd "$REPO_ROOT" && SWE_WORKSPACE_DIR="$TEST_WS_STATUS" bash run.sh --status status-agent 2>&1)"
 ACTUAL_EXIT=$?
 set -e
-if echo "$OUTPUT" | grep -q "agent_error\|error"; then
+if check_output "$OUTPUT" "agent_error|error"; then
     echo "  ✓ T2-52: agent_error shows red !"
     PASS=$((PASS + 1))
 else
@@ -374,7 +374,7 @@ set +e
 OUTPUT="$(cd "$REPO_ROOT" && SWE_WORKSPACE_DIR="$TEST_WS_STATUS" bash run.sh --status status-agent 2>&1)"
 ACTUAL_EXIT=$?
 set -e
-if echo "$OUTPUT" | grep -q "no result"; then
+if check_output "$OUTPUT" "no result"; then
     echo "  ✓ T2-53: no result.json shows ?"
     PASS=$((PASS + 1))
 else
