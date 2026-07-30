@@ -199,13 +199,22 @@ do_cleanup() {
         echo "Released ${#orphan_endpoints[@]} orphaned network endpoint(s)."
     fi
 
+    # Remove any stopped containers that may hold references to images
+    local stopped_containers=()
+    mapfile -t stopped_containers < <(docker ps -aq --filter 'status=exited' 2>/dev/null)
+    if [ ${#stopped_containers[@]} -gt 0 ]; then
+        docker rm -f "${stopped_containers[@]}" >/dev/null 2>&1 || true
+    fi
+
     mapfile -t images < <(
         docker images --format '{{.Repository}} {{.ID}}' |
             awk '$1 ~ /^swebench\/sweb\./ {print $2}' |
             sort -u
     )
     if [ ${#images[@]} -gt 0 ]; then
-        docker rmi "${images[@]}"
+        for img in "${images[@]}"; do
+            docker rmi --force "$img" 2>/dev/null || true
+        done
         echo "Removed ${#images[@]} SWE-bench image(s)."
     fi
 
@@ -237,7 +246,7 @@ do_cleanup_partial() {
 # Save swebench image to cache (NAS/external storage)
 save_image_to_cache() {
     local image_name="$1"
-    [ -z "$SWEBENCH_IMAGE_CACHE" ] && return 0
+    [ -z "${SWEBENCH_IMAGE_CACHE:-}" ] && return 0
     local cache_dir="${SWEBENCH_IMAGE_CACHE}/images"
     mkdir -p "$cache_dir"
     local safe_name=$(echo "$image_name" | tr '/:' '__')
