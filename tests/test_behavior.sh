@@ -901,6 +901,8 @@ if [ "$FAIL" -gt 0 ]; then
 fi
 
 # ==============================================================================
+
+# ==============================================================================
 # T-B14: Fill Remaining Gaps — Mocked Integration Tests
 # ==============================================================================
 echo "--- T-B14: Fill Remaining Gaps ---"
@@ -913,18 +915,8 @@ set +e
 OUTPUT=$(CACHE_FILE="$INVALID_CACHE" fetch_dataset 2>&1) || true
 set -e
 rm -f "$INVALID_CACHE"
-echo "$OUTPUT" | grep -q "ERROR|corrupted" && pass "fetch_dataset handles invalid JSON" || fail_output "handles invalid JSON gracefully"
-
-# B2-03: OLD (removed)
-TOTAL=$((TOTAL + 1))
-INVALID_CACHE=$(mktemp)
-echo "not valid json {{{" > "$INVALID_CACHE"
-set +e
-OUTPUT=$(CACHE_FILE="$INVALID_CACHE" fetch_dataset 2>&1) || true
-set -e
-rm -f "$INVALID_CACHE"
-# Should fail or return empty/error when cache is invalid
-[ -z "$OUTPUT" ] || echo "$OUTPUT" | grep -q "ERROR\|invalid\|corrupted" && pass "fetch_dataset handles invalid JSON" || fail_output "handles invalid JSON gracefully"
+# When cache is invalid, it tries to fetch from HuggingFace which fails without Docker
+echo "$OUTPUT" | grep -q "ERROR\|corrupted" && pass "fetch_dataset handles invalid JSON" || fail_output "handles invalid JSON gracefully"
 
 # B5-01: resume skips tasks that already have result.json (using hello-world)
 TOTAL=$((TOTAL + 1))
@@ -940,7 +932,7 @@ JSON
 set +e
 OUTPUT=$(SWE_WORKSPACE_DIR="${HELLO_RESUME_WORKSPACE}" do_run_all smoke-test --resume --run-id hello-resume 2>&1) || true
 set -e
-echo "$OUTPUT" | grep -q "skipped" && pass "resume skips tasks with result.json" || fail_output "resume skips completed tasks"
+echo "$OUTPUT" | grep -q "skipped" && pass "resume skips completed tasks" || fail_output "resume skips completed tasks"
 
 # B5-02: resume checks for existing task state before running
 TOTAL=$((TOTAL + 1))
@@ -1058,30 +1050,30 @@ echo "$OUTPUT" | grep -q "=== SWE-bench Harness Status ===" && pass "summarize w
 # B9-01: help text mentions --run command
 TOTAL=$((TOTAL + 1))
 set +e
-OUTPUT=$(bash "${REPO_ROOT}/run.sh" --help 2>&1) || true
+OUTPUT=$(grep -A2 "^  --run " "${REPO_ROOT}/run.sh" 2>&1) || true
 set -e
-echo "$OUTPUT" | grep -q "\-\-run" && pass "help mentions --run" || pass "help mentions --run"
+echo "$OUTPUT" | grep -q "WORK" && pass "help mentions --run" || fail_output "help mentions --run"
 
 # B9-02: help text mentions --eval command
 TOTAL=$((TOTAL + 1))
 set +e
-OUTPUT=$(bash "${REPO_ROOT}/run.sh" --help 2>&1) || true
+OUTPUT=$(grep -A2 "^  --eval " "${REPO_ROOT}/run.sh" 2>&1) || true
 set -e
-echo "$OUTPUT" | grep -q "\-\-eval" && pass "help mentions --eval" || pass "help mentions --eval"
+echo "$OUTPUT" | grep -q "EVAL" && pass "help mentions --eval" || fail_output "help mentions --eval"
 
 # B9-03: help text mentions --run-all command
 TOTAL=$((TOTAL + 1))
 set +e
-OUTPUT=$(bash "${REPO_ROOT}/run.sh" --help 2>&1) || true
+OUTPUT=$(grep -A2 "^  --run-all " "${REPO_ROOT}/run.sh" 2>&1) || true
 set -e
-echo "$OUTPUT" | grep -q "\-\-run-all" && pass "help mentions --run-all" || pass "help mentions --run-all"
+echo "$OUTPUT" | grep -q "--timeout" && pass "help mentions --run-all" || fail_output "help mentions --run-all"
 
 # B9-04: help text mentions --cleanup command
 TOTAL=$((TOTAL + 1))
 set +e
-OUTPUT=$(bash "${REPO_ROOT}/run.sh" --help 2>&1) || true
+OUTPUT=$(grep -A2 "^  --cleanup$" "${REPO_ROOT}/run.sh" 2>&1) || true
 set -e
-echo "$OUTPUT" | grep -q "\-\-cleanup" && pass "help mentions --cleanup" || pass "help mentions --cleanup"
+echo "$OUTPUT" | grep -q "harness-owned" && pass "help mentions --cleanup" || fail_output "help mentions --cleanup"
 
 # ==============================================================================
 # Summary
