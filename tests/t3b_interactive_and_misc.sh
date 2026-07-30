@@ -125,7 +125,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^do_interactive()" run.sh | grep -q "/agent:ro" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T3b-10: bundle mounted read-only at /agent"
     PASS=$((PASS + 1))
 else
@@ -143,7 +143,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^do_interactive()" run.sh | grep -q "entrypoint.sh" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T3b-11: entrypoint.sh is called in interactive mode"
     PASS=$((PASS + 1))
 else
@@ -169,7 +169,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^do_interactive()" run.sh | grep -q "bundle" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T3b-20: interactive validates bundle exists"
     PASS=$((PASS + 1))
 else
@@ -187,7 +187,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^do_interactive()" run.sh | grep -q "not found" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T3b-21: interactive prints error if bundle missing"
     PASS=$((PASS + 1))
 else
@@ -213,7 +213,7 @@ OUTPUT=$(bash -c '
     grep -A50 "^do_run()" run.sh | grep -q "agent_output_root" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T3b-30: do_run uses agent_output_root for isolation"
     PASS=$((PASS + 1))
 else
@@ -231,7 +231,7 @@ OUTPUT=$(bash -c '
     grep -A50 "^do_run()" run.sh | grep -q "OUTPUT_DIR" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T3b-31: OUTPUT_DIR used for output paths"
     PASS=$((PASS + 1))
 else
@@ -313,7 +313,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^summarize_agent()" run.sh | grep -q "patch_bytes" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T3b-43: patch_bytes is used in summarize_agent"
     PASS=$((PASS + 1))
 else
@@ -341,7 +341,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^summarize_agent()" run.sh | grep -q "result.json" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T3b-50: summarize_agent reads result.json"
     PASS=$((PASS + 1))
 else
@@ -359,7 +359,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^summarize_agent()" run.sh | grep -q "JSONDecodeError" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T3b-51: summarize_agent handles corrupted JSON gracefully"
     PASS=$((PASS + 1))
 else
@@ -377,7 +377,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^summarize_agent()" run.sh | grep -q "resolved" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T3b-52: summarize prints resolved count"
     PASS=$((PASS + 1))
 else

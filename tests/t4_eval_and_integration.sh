@@ -126,7 +126,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^do_eval()" run.sh | grep -q "predictions.jsonl" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T4-10: do_eval creates predictions.jsonl"
     PASS=$((PASS + 1))
 else
@@ -144,7 +144,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^do_eval()" run.sh | grep -q "instance_id" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T4-11: predictions.jsonl contains instance_id field"
     PASS=$((PASS + 1))
 else
@@ -162,7 +162,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^do_eval()" run.sh | grep -q "model_patch" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T4-12: predictions.jsonl contains model_patch field"
     PASS=$((PASS + 1))
 else
@@ -188,7 +188,7 @@ OUTPUT=$(bash -c '
     grep -A50 "^do_eval()" run.sh | grep -q "resolved_ids" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T4-20: do_eval folds resolved instances"
     PASS=$((PASS + 1))
 else
@@ -206,7 +206,7 @@ OUTPUT=$(bash -c '
     grep -A50 "^do_eval()" run.sh | grep -q "error_ids" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T4-21: do_eval folds errored instances"
     PASS=$((PASS + 1))
 else
@@ -224,7 +224,7 @@ OUTPUT=$(bash -c '
     grep -A50 "^do_eval()" run.sh | grep -q "meta\['status'\]" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T4-22: do_eval updates status field"
     PASS=$((PASS + 1))
 else
@@ -250,7 +250,7 @@ OUTPUT=$(bash -c '
     grep -A50 "^do_run()" run.sh | grep -q "agent_output_root" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T4-30: do_run isolates outputs per agent"
     PASS=$((PASS + 1))
 else
@@ -268,7 +268,7 @@ OUTPUT=$(bash -c '
     grep -A30 "^do_eval()" run.sh | grep -q "eval_dir" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T4-31: do_eval uses agent-specific output dir"
     PASS=$((PASS + 1))
 else
@@ -294,7 +294,7 @@ OUTPUT=$(bash -c '
     grep -A50 "^do_run_all()" run.sh | grep -q "resume" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T4-40: --resume flag parsed in do_run_all"
     PASS=$((PASS + 1))
 else
@@ -312,7 +312,7 @@ OUTPUT=$(bash -c '
     grep -A50 "^do_run_all()" run.sh | grep -q "result.json" && echo "FOUND" || echo "NOT_FOUND"
 ' 2>&1) || true
 set -e
-if echo "$OUTPUT" | grep -q "FOUND"; then
+if check_output "$OUTPUT" "FOUND"; then
     echo "  ✓ T4-41: resume checks for result.json"
     PASS=$((PASS + 1))
 else

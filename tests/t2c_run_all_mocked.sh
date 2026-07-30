@@ -164,10 +164,10 @@ echo ""
 echo "--- T2c.4: Storage Check Mid-Run ---"
 
 run_test_output 30 "storage check function exists in run_all" \
-    "grep -A100 'do_run_all()' '$REPO_ROOT/run.sh'" "check_storage"
+    "grep -A120 'do_run_all()' '$REPO_ROOT/run.sh'" "check_storage"
 
 run_test_output 31 "run_all breaks on storage failure" \
-    "grep -A100 'do_run_all()' '$REPO_ROOT/run.sh'" "break"
+    "grep -A120 'do_run_all()' '$REPO_ROOT/run.sh'" "break"
 
 echo ""
 
@@ -178,10 +178,10 @@ echo ""
 echo "--- T2c.5: do_run_all() Output Format ---"
 
 run_test_output 40 "run_all prints WORK header for each instance" \
-    "grep -A100 'do_run_all()' '$REPO_ROOT/run.sh'" "WORK]"
+    "grep -A120 'do_run_all()' '$REPO_ROOT/run.sh'" "WORK]"
 
 run_test_output 41 "run_all prints Done summary" \
-    "grep -A100 'do_run_all()' '$REPO_ROOT/run.sh'" "Done:"
+    "grep -A120 'do_run_all()' '$REPO_ROOT/run.sh'" "Done:"
 
 echo ""
 
@@ -211,14 +211,14 @@ run_test_output 24 "resume checks for result.json before running" \
 TOTAL=$((TOTAL + 1))
 echo "T2c-25: resume increments skipped counter ..." >&2
 run_test_output 25 "resume increments skipped counter" \
-    "grep -A100 'do_run_all()' '$REPO_ROOT/run.sh' | grep 'skipped='" "skipped="
+    "grep -A120 'do_run_all()' '$REPO_ROOT/run.sh' | grep 'skipped='" "skipped="
 
 # T2-26: One instance fails, continues to next
 # Verify the loop catches do_run failures and increments failed counter
 TOTAL=$((TOTAL + 1))
 echo "T2c-26: failure increments failed counter, loop continues ..." >&2
 run_test_output 26 "failure increments failed counter" \
-    "grep -A100 'do_run_all()' '$REPO_ROOT/run.sh' | grep 'failed='" "failed="
+    "grep -A120 'do_run_all()' '$REPO_ROOT/run.sh' | grep 'failed='" "failed="
 
 echo ""
 
