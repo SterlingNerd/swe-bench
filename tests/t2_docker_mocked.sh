@@ -16,6 +16,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SOURCE_HELPER="${SCRIPT_DIR}/test_helper.sh"
+[ -f "$SOURCE_HELPER" ] && source "$SOURCE_HELPER"
 LOG_FILE="${SCRIPT_DIR}/t2_docker_mocked.log"
 PASS=0
 FAIL=0
@@ -170,7 +172,7 @@ run_test_output() {
         bash "${REPO_ROOT}/run.sh" --run mock-test "$TEST_INSTANCE" 3600 2>&1) || true
     set -e
 
-    if echo "$output" | grep -qF "$expected_pattern"; then
+    if check_output "$output" "$expected_pattern"; then
         echo "  ✓ T2M-${id}: ${name}"
         PASS=$((PASS + 1))
     else
