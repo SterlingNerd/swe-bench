@@ -260,7 +260,7 @@ do_cleanup >/dev/null
 cleanup_calls=$(<"$FAKE_DOCKER_LOG")
 assert_contains "$cleanup_calls" "ps -aq --filter name=^/swe_"
 assert_contains "$cleanup_calls" "rm -f harness_container"
-assert_contains "$cleanup_calls" "rmi image_one"
+assert_contains "$cleanup_calls" "rmi --force image_one"
 [[ "$cleanup_calls" != *"image_two"* ]] || fail "cleanup selected unrelated image"
 echo "ok 9 - Docker cleanup remains harness-scoped"
 
