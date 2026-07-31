@@ -17,7 +17,21 @@ The entire bash orchestrator (`run.sh`, 1306 lines) has been rewritten in Python
 | `manifest.py` | Run tracking & attempt isolation (P1) | 19 | ✅ |
 | `runner.py` | Instance execution & summarization | 8 | ✅ |
 | `cli.py` | Click-based CLI interface | 17 | ✅ |
-| **Total** | **~5,500 lines** | **140** | **All passing** |
+| **Total** | **~5,500 lines** | **140 unit** | **All passing** |
+
+### Completed (P1b — Integration Tests)
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| `test_runner_mocked.py` | 13 | Docker ops: success, timeout, error, OOM, cp_fail |
+| `test_dataset_integration.py` | 7 | Cache lifecycle, corruption recovery, persistence |
+| `test_manifest_integration.py` | 12 | Run lifecycle, attempt sequencing, cleanup |
+| `test_bundles_integration.py` | 13 | Real subprocess builds, discovery, sorting |
+| `test_cli_integration.py` | 27 | Arg parsing, command dispatch for all commands |
+| `test_e2e.py` | 7 | Full workflow: run → manifest → attempt → summarize |
+| **Total** | **80 integration** | **All passing** |
+
+**Grand Total: 220 tests (140 unit + 80 integration)**
 
 ### Architecture
 
@@ -79,21 +93,19 @@ tests/
 
 ## Remaining Work
 
-### Phase 1: Integration Tests (P1b) — NEXT
+### Phase 1: Integration Tests (P1b) ✅ DONE
 
-Port the bash integration tests to Python. The unit tests encode the specification; integration tests verify end-to-end behavior.
+All major integration test categories ported from bash to Python.
 
-**What to build:**
-- `tests/integration/` — Integration test suite
-- Mirror existing test categories: T0 (arg parsing), T1 (filesystem), T2 (Docker mocked), T3 (e2e), T4 (eval)
-- Use fixtures from `tests/fixtures/` (mock-entrypoint.sh, fake docker)
+**Completed:**
+- ✅ T2_docker_mocked — do_run() logic paths (success, timeout, error, cp_fail, oom)
+- ✅ T1_filesystem — dataset cache, index/list, bundle build/rebuild
+- ✅ T0_pure_shell — arg parsing, config defaults
+- ✅ T3_e2e — end-to-end workflows
+- ⏳ T4_eval_and_integration — eval, predictions.jsonl (next)
 
-**Priority:**
-1. T2_docker_mocked — do_run() logic paths (success, timeout, error, cp_fail, oom)
-2. T1_filesystem — dataset cache, index/list, bundle build/rebuild
-3. T0_pure_shell — arg parsing, config defaults
-4. T3_e2e — end-to-end workflows
-5. T4_eval_and_integration — eval, predictions.jsonl
+**Next:**
+1. T4_eval_and_integration — harness result folding, predictions.jsonl generation
 
 ### Phase 2: Eval Integration (P2)
 
@@ -158,7 +170,7 @@ The `--eval` command currently runs swebench harness via subprocess. Need to:
 
 ## Next Immediate Steps
 
-1. **Create `tests/integration/`** — Port T2_docker_mocked first (highest value)
-2. **Add integration test fixtures** — Python equivalents of mock-entrypoint.sh
-3. **Implement per-instance eval** — Fold harness results into attempt results
-4. **Update TODO.md** as work progresses
+1. **T4_eval_and_integration** — Harness result folding, predictions.jsonl generation
+2. **Per-instance eval** — Evaluate immediately after agent run (not batched at end)
+3. **Image pruning** — Prune swebench images after eval completes
+4. **Smart ordering** — Sort instances by repo → version for better layer caching
