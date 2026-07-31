@@ -129,12 +129,13 @@ All major integration test categories ported from bash to Python.
 - NAS storage for cached layers
 - Replace tarball cache with registry mirror
 
-### Phase 5: Cleanup & Hardening (P5)
+### Phase 5: Cleanup & Hardening (P5) ✅ DONE
 
-1. Fix `--cleanup-partial` scope — add `--agent` requirement
-2. Scope cleanup traps to active container only
-3. Preserve containers during timeout/error paths
-4. Add `--run-id` to eval — prevent collision when same agent produces different patches
+- ✅ cleanup-partial scope enforcement (never traverses above agent directory)
+- ✅ Scoped container cleanup targeting
+- ✅ Artifact preservation on timeout/error paths
+- ✅ Run ID isolation for eval
+- ✅ tests/integration/test_cleanup_hardening.py — 9 tests
 
 ---
 
@@ -168,7 +169,7 @@ All major integration test categories ported from bash to Python.
 
 ## Next Immediate Steps
 
-1. **P5: Cleanup & Hardening** — Fix cleanup-partial scope, trap safety, artifact preservation
+1. **P4: Registry Integration** — Pull-through registry, NAS caching
 2. **run_all with resume** — Add --resume flag support to Runner.run_all()
 3. **Per-instance eval** — Evaluate immediately after agent run (not batched at end)
-4. **P4: Registry Integration** — Pull-through registry, NAS caching
+4. **Final cleanup** — Ensure all bash tests have Python equivalents
