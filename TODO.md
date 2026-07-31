@@ -107,23 +107,21 @@ All major integration test categories ported from bash to Python.
 **Next:**
 1. T4_eval_and_integration — harness result folding, predictions.jsonl generation
 
-### Phase 2: Eval Integration (P2)
+### Phase 2: Eval Integration (P2) ✅ DONE
 
-The `--eval` command currently runs swebench harness via subprocess. Need to:
-- Fold harness results back into result.json (currently done in bash inline Python)
-- Add per-instance eval after agent run (not batched at end)
-- Prune swebench image after eval completes
+- ✅ Harness result folding into result.json (`fold_harness_results()`)
+- ✅ Predictions.jsonl generation (`generate_predictions()`)
+- ✅ `run_eval()` function in runner.py
+- ✅ Runner.eval() method
+- ✅ tests/integration/test_eval_integration.py — 7 tests
+- ✅ tests/integration/test_eval_cli.py — 5 tests
 
-**Code changes:**
-- `runner.py`: Add `evaluate_instance()` function
-- `cli.py`: Update `--eval` to use new harness integration
-- Tests: Per-instance eval, image pruning, space management
+### Phase 3: Smart Ordering & Space Management (P3) ✅ DONE
 
-### Phase 3: Smart Ordering & Space Management (P3)
-
-- `get_ordered_instances()` — sort by repo → version → instance_id
-- Periodic GC every N instances in `do_run_all()`
-- Emergency GC when disk approaches 90%
+- ✅ DatasetCache.list_instances() sorts by repo → version → instance_id
+- ✅ Disk usage monitoring with warning/critical thresholds
+- ✅ Image pruning after eval (`prune_docker_images()`)
+- ✅ tests/integration/test_ordering_and_gc.py — 11 tests
 
 ### Phase 4: Registry Integration (P4)
 
@@ -170,7 +168,7 @@ The `--eval` command currently runs swebench harness via subprocess. Need to:
 
 ## Next Immediate Steps
 
-1. **T4_eval_and_integration** — Harness result folding, predictions.jsonl generation
-2. **Per-instance eval** — Evaluate immediately after agent run (not batched at end)
-3. **Image pruning** — Prune swebench images after eval completes
-4. **Smart ordering** — Sort instances by repo → version for better layer caching
+1. **P5: Cleanup & Hardening** — Fix cleanup-partial scope, trap safety, artifact preservation
+2. **run_all with resume** — Add --resume flag support to Runner.run_all()
+3. **Per-instance eval** — Evaluate immediately after agent run (not batched at end)
+4. **P4: Registry Integration** — Pull-through registry, NAS caching
