@@ -46,6 +46,7 @@ class InstanceSummary(BaseModel):
 
     @classmethod
     def from_instance(cls, inst: Instance) -> InstanceSummary:
+        """Create a summary from a full Instance."""
         return cls(
             instance_id=inst.instance_id,
             repo=inst.repo,
