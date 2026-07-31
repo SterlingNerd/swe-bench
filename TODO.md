@@ -184,7 +184,7 @@ All major integration test categories ported from bash to Python.
 
 ## Next Immediate Steps
 
-1. **Final cleanup** — Ensure all bash tests have Python equivalents
+1. **Final cleanup** ✅ — All bash tests have Python equivalents
 2. **E2E with real Docker** — Add optional Docker-based E2E tests (when Docker available)
 3. **Documentation** — Add docstrings, README updates
 4. **Performance** — Benchmark and optimize hot paths
