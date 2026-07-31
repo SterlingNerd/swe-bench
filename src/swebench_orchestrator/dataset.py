@@ -82,8 +82,12 @@ class DatasetCache:
                 inst for inst in results
                 if any(filter_lower in str(v).lower() for v in inst.values())
             ]
-        # Sort by repo, then version
-        for inst in sorted(results, key=lambda x: (x.get("repo", ""), x.get("version", ""))):
+        # Sort by repo, then version, then instance_id
+        for inst in sorted(results, key=lambda x: (
+            x.get("repo", ""),
+            x.get("version", ""),
+            x.get("instance_id", ""),
+        )):
             yield inst
 
     def save(self, data: list[dict[str, Any]]) -> None:
