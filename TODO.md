@@ -1,250 +1,164 @@
-# TODO: SWE-bench Orchestrator Refactor
+# TODO: SWE-bench Orchestrator — Python Rewrite
 
-## Current State (run.sh — 1273 lines, 30+ functions)
+## Status: ✅ Foundation Complete — 140 Unit Tests Passing
+
+The entire bash orchestrator (`run.sh`, 1306 lines) has been rewritten in Python with proper DI and testing. All core modules are implemented and tested.
+
+### Completed (P0 — Foundation)
+
+| Module | Lines | Tests | Status |
+|--------|-------|-------|--------|
+| `models.py` | Data models (pydantic) | 23 | ✅ |
+| `config.py` | Configuration management | 10 | ✅ |
+| `dataset.py` | Dataset cache & HuggingFace fetch | 19 | ✅ |
+| `bundles.py` | Agent bundle discovery & building | 16 | ✅ |
+| `storage.py` | Disk usage & Docker cleanup | 13 | ✅ |
+| `docker_ops.py` | Container lifecycle management | 15 | ✅ |
+| `manifest.py` | Run tracking & attempt isolation (P1) | 19 | ✅ |
+| `runner.py` | Instance execution & summarization | 8 | ✅ |
+| `cli.py` | Click-based CLI interface | 17 | ✅ |
+| **Total** | **~5,500 lines** | **140** | **All passing** |
 
 ### Architecture
-- Self-contained agent bundles mounted into swebench eval images
-- Two phases: [WORK] → [EVAL]
-- Flat output: `<workspace>/outputs/<agent>/<instance_id>/`
-- Docker images pulled per instance, cached via tarballs (broken — overlayfs produces 10KB fake files)
 
-### Functions
-| Function | Purpose |
-|----------|---------|
-| `show_help()` | Print usage |
-| `do_index()` | Fetch/cache dataset from HuggingFace |
-| `do_list()` | List cached instances with optional filter |
-| `do_build()` / `build_agent_bundle()` | Build agent bundles |
-| `do_rebuild()` | Force rebuild (--no-cache) |
-| `check_storage()` | Check disk usage vs MAX_STORAGE_PCT (default 80%) |
-| `require_docker()` / `ensure_docker()` | Docker availability check with caching |
-| `record_host_result()` | Write result.json with status, exit code, elapsed |
-| `release_container()` | Remove container + release bridge endpoint |
-| `do_cleanup()` | Remove all swe_* containers and swebench images |
-| `do_cleanup_partial()` | Remove incomplete output dirs (DRY RUN only) |
-| `save_image_to_cache()` / `load_image_from_cache()` | Tarball cache (broken) |
-| `fetch_dataset()` | Cache validation + HuggingFace fetch |
-| `get_instance()` | Find single instance by ID from cache |
-| `instance_to_image()` | Convert instance_id to swebench image name |
-| `do_run()` | Run agent against single instance |
-| `do_run_all()` | Loop over all instances |
-| `do_eval()` | Evaluate patches via swebench harness |
-| `summarize_agent()` / `do_summarize()` | Combine results into summary.json |
-| `show_agent_status()` / `do_status()` | Show completion status with colored output |
-| `do_init()` | Install swebench Python package in venv |
-| `do_interactive()` | Drop into interactive shell in eval image |
-
-### Bugs Found & Fixed (from test coverage)
-1. **EXIT trap grep returning 1** → `--help` exits 1
-   - Fix: Use `mapfile` + `|| true` in `stop_running_containers()`
-2. **`--run-all --timeout abc` loops through all instances** instead of rejecting
-   - Fix: Add numeric validation in `do_run_all()` before entering loop
-
-### Test Coverage (157 tests, all passing)
 ```
+src/swebench_orchestrator/
+├── __init__.py          # Package init
+├── cli.py               # Click CLI (mirrors run.sh commands)
+├── config.py            # Immutable Config dataclass
+├── models.py            # Pydantic data models
+├── dataset.py           # DatasetCache + fetch_and_cache_dataset()
+├── bundles.py           # AgentBundle + BundleBuilder
+├── storage.py           # Disk usage, Docker cleanup
+├── docker_ops.py        # DockerOps class for container lifecycle
+├── manifest.py          # RunManager + attempt isolation (P1)
+└── runner.py            # Runner class + run_instance() + summarize_results()
+
 tests/
-├── test_runner.sh          # Unified runner: ./tests/test_runner.sh [T0|T1|T1b|T2|T2b|T2c|T2d|T3|T3b|T4|all]
-├── test_helper.sh          # Shared helpers (mock cache, mock agent, assertions)
-├── t0_pure_shell.sh        # 34 tests — arg parsing, config, storage, image naming, cache helpers
-├── t1_filesystem.sh        # 21 tests — dataset cache, index/list, bundle build/rebuild, cleanup-partial
-├── t1b_instance_lookup.sh  # 15 tests — instance lookup, dataset validation, --list output
-├── t2_docker.sh            # 8 tests — Docker-dependent: cleanup, init, summarize, status, eval
-├── t2_docker_mocked.sh     # 10 tests — do_run() logic paths via fake docker
-├── t2b_signal_handling.sh  # 11 tests — signal handling, traps, stop_running_containers
-├── t2c_run_all_mocked.sh   # 8 tests — do_run_all() argument parsing, agent validation
-├── t2d_docker_mock_edge_cases.sh  # 10 tests — Docker mock edge cases, integration
-├── t3_e2e.sh               # 2 tests — end-to-end workflows
-├── t3b_interactive_and_misc.sh  # 16 tests — interactive mode, misc edge cases
-├── t4_eval_and_integration.sh     # 12 tests — eval, predictions.jsonl, report folding
-└── fixtures/
-    ├── docker              # PATH-swappable fake docker (5 modes: success, timeout, error, cp_fail, oom)
-    └── mock-entrypoint.sh  # Minimal test agent that writes expected artifacts
+├── unit/
+│   ├── test_models.py       # 23 tests — data model specifications
+│   ├── test_config.py       # 10 tests — configuration specs
+│   ├── test_dataset.py      # 19 tests — dataset cache/query
+│   ├── test_bundles.py      # 16 tests — bundle building
+│   ├── test_storage.py      # 13 tests — storage management
+│   ├── test_docker_ops.py   # 15 tests — Docker operations
+│   ├── test_manifest.py     # 19 tests — manifest infrastructure (P1)
+│   ├── test_runner.py       # 8 tests — runner logic
+│   └── test_cli.py          # 17 tests — CLI interface
 ```
+
+### Key Design Decisions
+
+1. **Pydantic models** — Type-safe data validation, mirrors bash JSON handling
+2. **Click CLI** — Drop-in replacement for `run.sh`, same commands
+3. **DockerOps class** — Clean abstraction over subprocess/docker calls
+4. **RunManager** — Manifest-based run tracking with immutable attempt directories
+5. **Config dataclass (frozen)** — Immutable, testable configuration
+6. **Dependency injection** — All modules accept dependencies via constructor/params
+
+### Commands Mapped
+
+| run.sh | Python CLI |
+|--------|-----------|
+| `./run.sh --help` | `swebench-orchestrator --help` |
+| `./run.sh --index` | `swebench-orchestrator --index` |
+| `./run.sh --list [F]` | `swebench-orchestrator --list [F]` |
+| `./run.sh --build [A]` | `swebench-orchestrator --build [A]` |
+| `./run.sh --rebuild [S]` | `swebench-orchestrator --rebuild [S]` |
+| `./run.sh --run A I [T]` | `swebench-orchestrator --run A I [--timeout T]` |
+| `./run.sh --run-all A` | `swebench-orchestrator --run-all A [--timeout T] [--resume]` |
+| `./run.sh --eval A` | `swebench-orchestrator --eval A` |
+| `./run.sh --summarize [A]` | `swebench-orchestrator --summarize [A]` |
+| `./run.sh --status [A]` | `swebench-orchestrator --status [A]` |
+| `./run.sh --interactive A I` | `swebench-orchestrator --interactive A I` |
+| `./run.sh --init` | `swebench-orchestrator --init` |
+| `./run.sh --cleanup` | `swebench-orchestrator --cleanup` |
+| `./run.sh --cleanup-partial` | `swebench-orchestrator --cleanup-partial` |
 
 ---
 
-## Problems to Fix
+## Remaining Work
 
-### From PR #1 Audit (Shared Harness)
-1. `--cleanup-partial` iterates one level too high — can delete entire agent output tree
-2. Cleanup traps target ALL `swe_*` containers — second process can stop first's container
-3. EXIT cleanup returns 1 when no matching container exists — breaks `./run.sh --help` (FIXED)
-4. Timeout/error paths remove containers before copy/finalization completes
-5. Reruns can reuse stale artifacts
-6. `release_container` removes before network disconnect (Docker docs say disconnect is container op)
-7. Eval reuses fixed agent name as `run_id` — collision when patches change
+### Phase 1: Integration Tests (P1b) — NEXT
 
-### From Operational Experience
-1. Docker Hub rate limiting (100 pulls/6hrs free tier)
-2. No space management — images accumulate until disk fills
-3. Eval runs once at end, after all work phases — no opportunity to reclaim space mid-run
-4. Images deleted/loaded in arbitrary order, causing maximum re-downloads
-5. Local storage won't fit entire suite (500GB+ needed)
-
----
-
-## Refactor Plan: Re-arrange How We Run Problems
-
-### Goal
-Move from flat output + batch eval to manifest-based runs with attempt isolation, per-instance eval, and active space management.
-
-### Architecture Target
-
-```
-<workspace>/runs/<RUN_ID>/
-├── manifest.json          # Run metadata, dataset hash, timeout, profile
-├── tasks/
-│   ├── <instance_id>/
-│   │   ├── attempt-001/   # Immutable attempt directory
-│   │   │   ├── result.json
-│   │   │   ├── patch.diff
-│   │   │   ├── agent_output.txt
-│   │   │   └── meta.json
-│   │   └── attempt-002/   # Rerun creates new attempt
-│   │       └── ...
-│   └── ...
-└── eval/
-    └── <RUN_ID>/          # Evaluation reports per run
-        ├── report.json
-        └── <instance_id>/
-            └── result.json
-```
-
-### Key Design Principles
-1. **Manifest-owned attempts** — each run creates immutable attempt directories
-2. **Per-instance eval** — evaluate immediately after agent run, not batched at end
-3. **Active space management** — prune images after eval, never let disk exceed 90%
-4. **Smart ordering** — process instances grouped by shared base layers
-5. **Attempt isolation** — reruns create new attempts, never overwrite previous ones
-
-### What We Replaced SQLite With
-Original plan had P1A: SQLite supervisor for state machines, leases, crash recovery.
-Replaced with: **Python CLI tool `scripts/run_artifacts.py`** that handles:
-- Manifest creation/resolution (JSON files on disk)
-- Attempt isolation via immutable directories
-- Scoped cleanup via `--agent` and `--run-id` flags
-- Event export for audit logging
-
-Tradeoff: Less robust crash recovery, but simpler to implement and test.
-
----
-
-## Implementation Phases
-
-### Phase 1: Manifest Infrastructure (P1) — START HERE
+Port the bash integration tests to Python. The unit tests encode the specification; integration tests verify end-to-end behavior.
 
 **What to build:**
-- `scripts/run_artifacts.py` — Python tool for manifest management
-  - `create-run` — create run manifest with provenance
-  - `resolve-run` — resolve latest or named run for an agent
-  - `cleanup-partial` — list/remove incomplete attempts (dry-run or --apply)
-  - `export-events` — export event audit log
+- `tests/integration/` — Integration test suite
+- Mirror existing test categories: T0 (arg parsing), T1 (filesystem), T2 (Docker mocked), T3 (e2e), T4 (eval)
+- Use fixtures from `tests/fixtures/` (mock-entrypoint.sh, fake docker)
 
-**Code changes in run.sh:**
-- Add `RUNS_DIR` variable (`<workspace>/runs`)
-- Replace flat `OUTPUT_DIR` with manifest-based structure
-- Add `--run-id ID` flag to `--run`, `--run-all`, `--eval`, `--summarize`, `--status`
-- Add `--profile NAME` flag for agent-specific configurations
+**Priority:**
+1. T2_docker_mocked — do_run() logic paths (success, timeout, error, cp_fail, oom)
+2. T1_filesystem — dataset cache, index/list, bundle build/rebuild
+3. T0_pure_shell — arg parsing, config defaults
+4. T3_e2e — end-to-end workflows
+5. T4_eval_and_integration — eval, predictions.jsonl
 
-**Testing needed:**
-- Manifest creation, resolution, cleanup-partial dry-run/apply
+### Phase 2: Eval Integration (P2)
 
-### Phase 2: Per-Instance Eval (P2)
-
-**What to build:**
-- `do_eval_instance(agent, instance_id)` — evaluate single instance immediately after agent run
-- Fold harness results into attempt's result.json
+The `--eval` command currently runs swebench harness via subprocess. Need to:
+- Fold harness results back into result.json (currently done in bash inline Python)
+- Add per-instance eval after agent run (not batched at end)
 - Prune swebench image after eval completes
 
-**Code changes in run.sh:**
-- Modify `do_run()` to call `do_eval_instance()` after work phase
-- Add `prune_image()` function for exact image removal
-- Add `ensure_space_for()` function with 90% hard limit
-
-**Testing needed:**
-- Per-instance eval, image pruning, space management
+**Code changes:**
+- `runner.py`: Add `evaluate_instance()` function
+- `cli.py`: Update `--eval` to use new harness integration
+- Tests: Per-instance eval, image pruning, space management
 
 ### Phase 3: Smart Ordering & Space Management (P3)
 
-**What to build:**
 - `get_ordered_instances()` — sort by repo → version → instance_id
 - Periodic GC every N instances in `do_run_all()`
 - Emergency GC when disk approaches 90%
 
-**Code changes in run.sh:**
-- Modify `do_run_all()` to use ordered instance list
-- Add periodic GC trigger (every 20 instances)
-- Add emergency GC when `check_storage()` returns warning
-
-**Testing needed:**
-- Smart ordering, periodic GC, emergency GC
-
 ### Phase 4: Registry Integration (P4)
 
-**What to build:**
 - Pull-through registry at `docker-registry.sterling.digital`
 - NAS storage for cached layers
-- Registry mirror configuration in `/etc/docker/daemon.json`
-
-**Code changes in run.sh:**
-- Add `--init-registry` command with registry detection and storage estimation
-- Replace tarball cache with registry mirror (remove `save_image_to_cache`, `load_image_from_cache`)
-- Update `do_run()` to use registry mirror for pulls
-
-**Testing needed:**
-- Registry detection, storage estimation, pull through registry, NAS caching
+- Replace tarball cache with registry mirror
 
 ### Phase 5: Cleanup & Hardening (P5)
 
-**What to fix:**
-1. Fix `--cleanup-partial` scope — add `--agent` requirement, never traverse above agent directory
-2. Scope cleanup traps to active container only — use `ACTIVE_CONTAINER` variable
-3. Fix EXIT trap return code — don't let cleanup failures propagate (FIXED)
-4. Preserve containers during timeout/error paths — copy artifacts before removing
-5. Add `--run-id` to eval — prevent collision when same agent produces different patches
-
-**Testing needed:**
-- Cleanup scope, trap safety, artifact preservation
+1. Fix `--cleanup-partial` scope — add `--agent` requirement
+2. Scope cleanup traps to active container only
+3. Preserve containers during timeout/error paths
+4. Add `--run-id` to eval — prevent collision when same agent produces different patches
 
 ---
 
-## Priority Order
+## Quick Reference: Bash → Python
 
-| Phase | Name | Effort | Value | Blocks |
-|-------|------|--------|-------|--------|
-| **P1** | Manifest infrastructure | Medium | High | P2, P3, P4, P5 |
-| **P2** | Per-instance eval | Medium | High | P3, P5 |
-| **P3** | Smart ordering & space mgmt | Low | High | P4 |
-| **P4** | Registry integration | High | High | None |
-| **P5** | Cleanup & hardening | Low | High | None |
-
-**Start with P1 — everything else depends on manifest infrastructure.**
-
----
-
-## Quick Reference: Current vs Target
-
-| Aspect | Current | Target |
-|--------|---------|--------|
-| Output structure | Flat: `outputs/<agent>/<iid>/` | Manifest: `runs/<run_id>/tasks/<iid>/attempt-NNN/` |
-| Eval timing | Batch at end | Per-instance after agent run |
-| Image lifecycle | Accumulate until disk full | Prune after eval, 90% hard limit |
-| Reruns | Overwrite previous results | New attempt directory |
-| Run provenance | None | Manifest with commit hash, dataset SHA, timeout, profile |
-| Cleanup scope | All `swe_*` containers | Active container only, scoped to run |
+| Aspect | Bash (run.sh) | Python (new) |
+|--------|--------------|--------------|
+| Entry point | `./run.sh` | `swebench-orchestrator` / `python -m swebench_orchestrator.cli` |
+| Config | Shell variables | `Config` dataclass (frozen, immutable) |
+| Data models | JSON strings | Pydantic models (`Instance`, `RunManifest`, `Attempt`, etc.) |
+| Dataset | Inline Python in bash | `DatasetCache` class + `fetch_and_cache_dataset()` |
+| Bundles | `bash build_bundle.sh` | `BundleBuilder.build_agent()` |
+| Docker | subprocess calls | `DockerOps` class with clean API |
+| Runs | Flat output dirs | Manifest-based: `runs/<run_id>/tasks/<iid>/attempt-NNN/` |
+| Tests | Bash scripts (157 tests) | pytest (140 unit tests, porting integration) |
 
 ---
+
+## Running Tests
+
+```bash
+# All unit tests
+.venv/swebench/bin/python -m pytest tests/unit/ -v
+
+# Specific module
+.venv/swebench/bin/python -m pytest tests/unit/test_manifest.py -v
+
+# With coverage
+.venv/swebench/bin/python -m pytest tests/unit/ --cov=swebench_orchestrator --cov-report=term-missing
+```
 
 ## Next Immediate Steps
 
-1. **Create `scripts/run_artifacts.py`** — manifest CRUD operations
-2. **Add `RUNS_DIR` and `--run-id` flag** to run.sh
-3. **Update `do_run()`** to create attempt directories under manifest
-4. **Write tests** for manifest creation, resolution, cleanup-partial
-
-Run tests before/after each change:
-```bash
-./tests/test_runner.sh          # All tests
-./tests/test_runner.sh T0       # Pure shell (no Docker)
-./tests/test_runner.sh --verbose # Verbose on failures
-```
+1. **Create `tests/integration/`** — Port T2_docker_mocked first (highest value)
+2. **Add integration test fixtures** — Python equivalents of mock-entrypoint.sh
+3. **Implement per-instance eval** — Fold harness results into attempt results
+4. **Update TODO.md** as work progresses
