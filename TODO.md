@@ -123,6 +123,21 @@ All major integration test categories ported from bash to Python.
 - ✅ Image pruning after eval (`prune_docker_images()`)
 - ✅ tests/integration/test_ordering_and_gc.py — 11 tests
 
+### Phase 4: Registry Integration (P4) ✅ DONE
+
+- ✅ Image cache save/load with tarballs (`save_image_to_tar`, `load_image_from_tar`)
+- ✅ Pull-through registry workflow detection
+- ✅ Registry mirror configuration generation
+- ✅ NAS storage path validation
+- ✅ tests/integration/test_registry.py — 11 tests
+
+### run_all Enhancements ✅ DONE
+
+- ✅ --resume flag support in Runner.run_all()
+- ✅ Per-instance eval with result folding
+- ✅ Error handling and statistics tracking
+- ✅ tests/integration/test_run_all.py — 10 tests
+
 ### Phase 4: Registry Integration (P4)
 
 - Pull-through registry at `docker-registry.sterling.digital`
@@ -169,7 +184,7 @@ All major integration test categories ported from bash to Python.
 
 ## Next Immediate Steps
 
-1. **P4: Registry Integration** — Pull-through registry, NAS caching
-2. **run_all with resume** — Add --resume flag support to Runner.run_all()
-3. **Per-instance eval** — Evaluate immediately after agent run (not batched at end)
-4. **Final cleanup** — Ensure all bash tests have Python equivalents
+1. **Final cleanup** — Ensure all bash tests have Python equivalents
+2. **E2E with real Docker** — Add optional Docker-based E2E tests (when Docker available)
+3. **Documentation** — Add docstrings, README updates
+4. **Performance** — Benchmark and optimize hot paths
