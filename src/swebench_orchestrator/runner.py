@@ -399,6 +399,198 @@ def summarize_results(output_dir: Path, agent: Optional[str] = None) -> dict[str
     }
 
 
+def generate_predictions(
+    output_dir: Path,
+    agent: str,
+) -> tuple[Path, list[str]]:
+    """Generate predictions.jsonl from instance patches.
+
+    Args:
+        output_dir: Agent's output directory.
+        agent: Agent name (used as model_name_or_path).
+
+    Returns:
+        Tuple of (predictions_file_path, list_of_instance_ids).
+    """
+    preds_file = output_dir / "predictions.jsonl"
+    instance_ids = []
+
+    for d in sorted(output_dir.iterdir()):
+        if not d.is_dir() or d.name in ("eval", "logs"):
+            continue
+        patch_file = d / "patch.diff"
+        if patch_file.exists() and patch_file.stat().st_size > 0:
+            instance_ids.append(d.name)
+
+    with open(preds_file, "w") as f:
+        for iid in instance_ids:
+            patch_path = output_dir / iid / "patch.diff"
+            patch_content = patch_path.read_text()
+            f.write(json.dumps({
+                "instance_id": iid,
+                "model_name_or_path": agent,
+                "model_patch": patch_content,
+            }) + "\n")
+
+    logger.info("Wrote %d predictions to %s", len(instance_ids), preds_file)
+    return preds_file, instance_ids
+
+
+def fold_harness_results(
+    output_dir: Path,
+    report_data: dict[str, Any],
+) -> int:
+    """Fold swebench harness results into each instance's result.json.
+
+    Args:
+        output_dir: Agent's output directory.
+        report_data: Harness report with resolved_ids, unresolved_ids, error_ids.
+
+    Returns:
+        Number of instances updated.
+    """
+    resolved = set(report_data.get("resolved_ids", []))
+    errored = set(report_data.get("error_ids", []))
+    unresolved = set(report_data.get("unresolved_ids", []))
+
+    folded = 0
+    for iid in resolved | errored | unresolved:
+        result_file = output_dir / iid / "result.json"
+        if not result_file.exists():
+            continue
+
+        try:
+            meta = read_json(result_file)
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+        if iid in resolved:
+            meta["local_eval"] = "resolved"
+            meta["status"] = "resolved"
+        elif iid in errored:
+            meta["local_eval"] = "error"
+            meta["status"] = "error"
+        else:
+            meta["local_eval"] = "failed"
+            meta["status"] = "failed"
+
+        write_json(result_file, meta)
+        folded += 1
+
+    logger.info("Folded results for %d instances", folded)
+    return folded
+
+
+def find_harness_report(output_dir: Path) -> Optional[dict[str, Any]]:
+    """Find the swebench harness report JSON file.
+
+    Searches for reports in the eval directory with various naming patterns.
+
+    Args:
+        output_dir: Agent's output directory.
+
+    Returns:
+        Report dict if found, None otherwise.
+    """
+    eval_dir = output_dir / "eval"
+    if not eval_dir.is_dir():
+        return None
+
+    # Try common report naming patterns
+    candidates = [
+        eval_dir / f"{output_dir.name}.{output_dir.name}.json",
+        eval_dir / f"{output_dir.name}__{output_dir.name}.json",
+    ]
+
+    # Also try newest JSON file in eval dir
+    json_files = sorted(eval_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    candidates.extend(json_files)
+
+    for report_file in candidates:
+        if report_file.exists():
+            try:
+                data = read_json(report_file)
+                if "resolved_ids" in data and "unresolved_ids" in data:
+                    return data
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+    return None
+
+
+def run_eval(
+    output_dir: Path,
+    agent: str,
+    dataset_name: str = "princeton-nlp/SWE-bench_Verified",
+    swebench_py: Optional[Path] = None,
+) -> dict[str, Any]:
+    """Run swebench harness evaluation for an agent's patches.
+
+    Args:
+        output_dir: Agent's output directory.
+        agent: Agent name.
+        dataset_name: HuggingFace dataset name.
+        swebench_py: Path to swebench Python (uses config if None).
+
+    Returns:
+        Dict with evaluation results.
+    """
+    # Generate predictions
+    preds_file, instance_ids = generate_predictions(output_dir, agent)
+
+    if not instance_ids:
+        logger.warning("No patches found to evaluate")
+        return {"status": "no_patches", "instances": 0}
+
+    logger.info(
+        "[EVAL] Running swebench harness on %d patch(es) for '%s'",
+        len(instance_ids), agent,
+    )
+
+    # Run swebench harness
+    if swebench_py is None:
+        swebench_py = Path(".venv/swebench/bin/python")
+
+    import subprocess
+
+    report_dir = output_dir / "eval"
+    report_dir.mkdir(exist_ok=True)
+
+    cmd = [
+        str(swebench_py),
+        "-m", "swebench.harness.run_evaluation",
+        "--dataset_name", dataset_name,
+        "--split", "test",
+        "--predictions_path", str(preds_file),
+        "--max_workers", "1",
+        "--cache_level", "instance",
+        "--report_dir", str(report_dir),
+        "--run_id", agent,
+        "-i" + ",".join(instance_ids),
+    ]
+
+    logger.info("Running: %s", " ".join(cmd))
+    result = subprocess.run(cmd, cwd=str(output_dir))
+
+    if result.returncode != 0:
+        logger.error("swebench harness failed with exit code %d", result.returncode)
+        return {"status": "harness_error", "instances": len(instance_ids)}
+
+    # Find and fold harness results
+    report_data = find_harness_report(output_dir)
+    if report_data:
+        folded = fold_harness_results(output_dir, report_data)
+        logger.info("Folded %d harness results", folded)
+    else:
+        logger.warning("No harness report found, skipping result folding")
+
+    return {
+        "status": "completed",
+        "instances": len(instance_ids),
+        "folded": fold_harness_results(output_dir, report_data or {}) if report_data else 0,
+    }
+
+
 class Runner:
     """High-level orchestrator combining all operations.
 
@@ -521,3 +713,20 @@ class Runner:
         """
         output_dir = self.config.output_dir / agent
         return summarize_results(output_dir, agent=agent)
+
+    def eval(self, agent: str) -> dict[str, Any]:
+        """Run swebench harness evaluation for an agent.
+
+        Args:
+            agent: Agent name.
+
+        Returns:
+            Eval result dict with status and instance count.
+        """
+        output_dir = self.config.output_dir / agent
+        return run_eval(
+            output_dir=output_dir,
+            agent=agent,
+            dataset_name=self.config.hf_dataset,
+            swebench_py=self.config.swebench_py if self.config.swebench_py.exists() else None,
+        )
