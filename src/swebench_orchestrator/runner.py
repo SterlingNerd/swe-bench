@@ -520,4 +520,4 @@ class Runner:
             Summary dict.
         """
         output_dir = self.config.output_dir / agent
-        return summarize_results(output_dir)
+        return summarize_results(output_dir, agent=agent)
