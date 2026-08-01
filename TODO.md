@@ -1,190 +1,113 @@
-# TODO: SWE-bench Orchestrator — Python Rewrite
+# TODO: SWE-bench Orchestrator Python Rewrite
 
-## Status: ✅ Foundation Complete — 140 Unit Tests Passing
+## Audited status
 
-The entire bash orchestrator (`run.sh`, 1306 lines) has been rewritten in Python with proper DI and testing. All core modules are implemented and tested.
+**State:** experimental implementation present; integration, safety, and
+provenance contracts are not yet merge-ready.
 
-### Completed (P0 — Foundation)
+This status reflects static review of `refactor-python` at `3853fe0`. The latest
+commit reports 297 Python tests passing. The repository contains 140 unit and
+157 integration test functions, but this documentation-only pass did not run
+them and the branch has no CI workflow.
 
-| Module | Lines | Tests | Status |
-|--------|-------|-------|--------|
-| `models.py` | Data models (pydantic) | 23 | ✅ |
-| `config.py` | Configuration management | 10 | ✅ |
-| `dataset.py` | Dataset cache & HuggingFace fetch | 19 | ✅ |
-| `bundles.py` | Agent bundle discovery & building | 16 | ✅ |
-| `storage.py` | Disk usage & Docker cleanup | 13 | ✅ |
-| `docker_ops.py` | Container lifecycle management | 15 | ✅ |
-| `manifest.py` | Run tracking & attempt isolation (P1) | 19 | ✅ |
-| `runner.py` | Instance execution & summarization | 8 | ✅ |
-| `cli.py` | Click-based CLI interface | 17 | ✅ |
-| **Total** | **~5,500 lines** | **140 unit** | **All passing** |
+The Python package currently exists alongside the full legacy `run.sh`. It is a
+parallel implementation, not yet the script's backing implementation. Only the
+`pi` agent adapter exists on this branch.
 
-### Completed (P1b — Integration Tests)
+## Implemented surface
 
-| Test File | Tests | Coverage |
-|-----------|-------|----------|
-| `test_runner_mocked.py` | 13 | Docker ops: success, timeout, error, OOM, cp_fail |
-| `test_dataset_integration.py` | 7 | Cache lifecycle, corruption recovery, persistence |
-| `test_manifest_integration.py` | 12 | Run lifecycle, attempt sequencing, cleanup |
-| `test_bundles_integration.py` | 13 | Real subprocess builds, discovery, sorting |
-| `test_cli_integration.py` | 27 | Arg parsing, command dispatch for all commands |
-| `test_e2e.py` | 7 | Full workflow: run → manifest → attempt → summarize |
-| **Total** | **80 integration** | **All passing** |
+| Area | Present | Audit status |
+|---|---:|---|
+| Pydantic models and immutable configuration | Yes | Unit-covered; environment mapping is incomplete |
+| Dataset cache and Hugging Face loading | Yes | Unit/integration coverage present |
+| Agent discovery and bundle building | Yes | Pi-only on this branch |
+| Docker lifecycle abstraction | Yes | Mock and optional Docker coverage present |
+| Run and attempt manifests | Yes | Metadata exists; artifacts remain in the flat layout |
+| Single and batch execution | Yes | Runtime contracts below need correction |
+| Prediction generation and local evaluation | Yes | Eval identifiers and outputs are not isolated by run |
+| Summary and status reporting | Yes | Reads the flat output layout |
+| Click CLI | Yes | Uses subcommands; not wired through `run.sh` |
+| Python tests | 297 functions | Latest commit says passing; not re-run here |
 
-**Grand Total: 220 tests (140 unit + 80 integration)**
+## P0: safety and data-integrity blockers
 
-### Architecture
+- [ ] **Fix `cleanup-partial` scope.** It currently examines agent directories
+  as though they were instance directories and can remove a complete agent
+  output tree. Correct both the Python and legacy Bash paths before documenting
+  either command as safe.
+- [ ] **Fix the Python output mount contract.** Mount and
+  `SWE_OUTPUT_ROOT` currently add the agent component at different layers,
+  creating a doubled-agent path.
+- [ ] **Preserve partial artifacts on timeout and container error.** Copy or
+  retain container outputs before removal, then record the host result without
+  overwriting useful agent metadata.
+- [ ] **Implement actual process locking.** `Config.lock_file` exists, but the
+  Python command path does not acquire it.
+- [ ] **Implement production signal handling.** Current signal tests install
+  handlers inside the tests; the CLI/runner does not install equivalent
+  handlers or scope cleanup to its active container.
+- [ ] **Scope Docker cleanup for concurrency.** Global `swe_*` cleanup can
+  interfere with another harness process.
 
-```
-src/swebench_orchestrator/
-├── __init__.py          # Package init
-├── cli.py               # Click CLI (mirrors run.sh commands)
-├── config.py            # Immutable Config dataclass
-├── models.py            # Pydantic data models
-├── dataset.py           # DatasetCache + fetch_and_cache_dataset()
-├── bundles.py           # AgentBundle + BundleBuilder
-├── storage.py           # Disk usage, Docker cleanup
-├── docker_ops.py        # DockerOps class for container lifecycle
-├── manifest.py          # RunManager + attempt isolation (P1)
-└── runner.py            # Runner class + run_instance() + summarize_results()
+## P1: run provenance and correctness
 
-tests/
-├── unit/
-│   ├── test_models.py       # 23 tests — data model specifications
-│   ├── test_config.py       # 10 tests — configuration specs
-│   ├── test_dataset.py      # 19 tests — dataset cache/query
-│   ├── test_bundles.py      # 16 tests — bundle building
-│   ├── test_storage.py      # 13 tests — storage management
-│   ├── test_docker_ops.py   # 15 tests — Docker operations
-│   ├── test_manifest.py     # 19 tests — manifest infrastructure (P1)
-│   ├── test_runner.py       # 8 tests — runner logic
-│   └── test_cli.py          # 17 tests — CLI interface
-```
+- [ ] Store each attempt's patch, result, logs, and agent output inside its
+  immutable attempt directory, or explicitly redesign manifests as metadata
+  indexes over immutable artifact locations.
+- [ ] Make one `run-all` invocation create one run manifest and pass that run ID
+  through every instance attempt.
+- [ ] Make evaluation identifiers, predictions, and reports unique per run;
+  do not use the fixed agent name as the only `run_id`.
+- [ ] Define resume semantics against run/attempt state rather than only the
+  existence of a flat `result.json`.
+- [ ] Add exact Docker-argument tests for output mounts, environment variables,
+  security flags, and copy paths.
+- [ ] Parse and test supported environment configuration consistently. At
+  present, `SWE_WORKSPACE_DIR` is the only environment override applied by
+  `Config`.
+- [ ] Decide whether `run.sh` remains a supported legacy entrypoint, becomes a
+  thin Python launcher, or is retired after parity validation.
 
-### Key Design Decisions
+## P2: validation and repository hygiene
 
-1. **Pydantic models** — Type-safe data validation, mirrors bash JSON handling
-2. **Click CLI** — Drop-in replacement for `run.sh`, same commands
-3. **DockerOps class** — Clean abstraction over subprocess/docker calls
-4. **RunManager** — Manifest-based run tracking with immutable attempt directories
-5. **Config dataclass (frozen)** — Immutable, testable configuration
-6. **Dependency injection** — All modules accept dependencies via constructor/params
+- [ ] Add CI for collection, unit tests, integration tests, and static checks.
+- [ ] Replace self-validating hardening tests with tests that invoke production
+  cleanup, signal, lock, artifact, manifest, and eval code paths.
+- [ ] Run the complete 297-test Python suite in a clean environment and record
+  the command, dependency versions, platform, and result.
+- [ ] Run the optional real-Docker suite separately and record Docker/WSL
+  versions and skipped tests.
+- [ ] Add `runs/`, `*.egg-info/`, `.pytest_cache/`, and coverage outputs to the
+  appropriate ignore policy; remove generated package metadata from source
+  control in a separate code-hygiene change.
+- [ ] Pin or lock development dependencies sufficiently for reproducible CI.
+- [ ] Document `push.sh` as an external Docker-registry publishing action or
+  rename it to make that effect explicit.
 
-### Commands Mapped
+## P3: agent parity and selective Codex port
 
-| run.sh | Python CLI |
-|--------|-----------|
-| `./run.sh --help` | `swebench-orchestrator --help` |
-| `./run.sh --index` | `swebench-orchestrator --index` |
-| `./run.sh --list [F]` | `swebench-orchestrator --list [F]` |
-| `./run.sh --build [A]` | `swebench-orchestrator --build [A]` |
-| `./run.sh --rebuild [S]` | `swebench-orchestrator --rebuild [S]` |
-| `./run.sh --run A I [T]` | `swebench-orchestrator --run A I [--timeout T]` |
-| `./run.sh --run-all A` | `swebench-orchestrator --run-all A [--timeout T] [--resume]` |
-| `./run.sh --eval A` | `swebench-orchestrator --eval A` |
-| `./run.sh --summarize [A]` | `swebench-orchestrator --summarize [A]` |
-| `./run.sh --status [A]` | `swebench-orchestrator --status [A]` |
-| `./run.sh --interactive A I` | `swebench-orchestrator --interactive A I` |
-| `./run.sh --init` | `swebench-orchestrator --init` |
-| `./run.sh --cleanup` | `swebench-orchestrator --cleanup` |
-| `./run.sh --cleanup-partial` | `swebench-orchestrator --cleanup-partial` |
+- [ ] Stabilize the generic agent bundle and output contracts using `pi`.
+- [ ] Review the archived Codex adapter file by file; do not merge the archived
+  branch or its 22-commit history into the rewrite.
+- [ ] Port only compatible Codex source/configuration into a new
+  `agents/codex/` implementation based on the stabilized Python contracts.
+- [ ] Add discovery, bundle, entrypoint, artifact, and model-backed canary tests
+  for Codex before advertising it in README examples.
 
----
+## Required validation gates
 
-## Remaining Work
+1. P0 cleanup and output-path regressions have production-path tests.
+2. Timeout/error canaries prove partial artifacts survive.
+3. Batch execution proves a single run owns isolated, immutable attempts.
+4. Evaluation proves predictions and reports cannot collide across runs.
+5. The Python test suite passes in CI and the real-Docker subset is reported
+   separately.
+6. Documentation examples are generated or checked against Click help.
+7. Josh reviews the rewrite and the integration target before any PR is moved
+   from draft or retargeted to `main`.
 
-### Phase 1: Integration Tests (P1b) ✅ DONE
+## Documentation-only branch scope
 
-All major integration test categories ported from bash to Python.
-
-**Completed:**
-- ✅ T2_docker_mocked — do_run() logic paths (success, timeout, error, cp_fail, oom)
-- ✅ T1_filesystem — dataset cache, index/list, bundle build/rebuild
-- ✅ T0_pure_shell — arg parsing, config defaults
-- ✅ T3_e2e — end-to-end workflows
-- ⏳ T4_eval_and_integration — eval, predictions.jsonl (next)
-
-**Next:**
-1. T4_eval_and_integration — harness result folding, predictions.jsonl generation
-
-### Phase 2: Eval Integration (P2) ✅ DONE
-
-- ✅ Harness result folding into result.json (`fold_harness_results()`)
-- ✅ Predictions.jsonl generation (`generate_predictions()`)
-- ✅ `run_eval()` function in runner.py
-- ✅ Runner.eval() method
-- ✅ tests/integration/test_eval_integration.py — 7 tests
-- ✅ tests/integration/test_eval_cli.py — 5 tests
-
-### Phase 3: Smart Ordering & Space Management (P3) ✅ DONE
-
-- ✅ DatasetCache.list_instances() sorts by repo → version → instance_id
-- ✅ Disk usage monitoring with warning/critical thresholds
-- ✅ Image pruning after eval (`prune_docker_images()`)
-- ✅ tests/integration/test_ordering_and_gc.py — 11 tests
-
-### Phase 4: Registry Integration (P4) ✅ DONE
-
-- ✅ Image cache save/load with tarballs (`save_image_to_tar`, `load_image_from_tar`)
-- ✅ Pull-through registry workflow detection
-- ✅ Registry mirror configuration generation
-- ✅ NAS storage path validation
-- ✅ tests/integration/test_registry.py — 11 tests
-
-### run_all Enhancements ✅ DONE
-
-- ✅ --resume flag support in Runner.run_all()
-- ✅ Per-instance eval with result folding
-- ✅ Error handling and statistics tracking
-- ✅ tests/integration/test_run_all.py — 10 tests
-
-### Phase 4: Registry Integration (P4)
-
-- Pull-through registry at `docker-registry.sterling.digital`
-- NAS storage for cached layers
-- Replace tarball cache with registry mirror
-
-### Phase 5: Cleanup & Hardening (P5) ✅ DONE
-
-- ✅ cleanup-partial scope enforcement (never traverses above agent directory)
-- ✅ Scoped container cleanup targeting
-- ✅ Artifact preservation on timeout/error paths
-- ✅ Run ID isolation for eval
-- ✅ tests/integration/test_cleanup_hardening.py — 9 tests
-
----
-
-## Quick Reference: Bash → Python
-
-| Aspect | Bash (run.sh) | Python (new) |
-|--------|--------------|--------------|
-| Entry point | `./run.sh` | `swebench-orchestrator` / `python -m swebench_orchestrator.cli` |
-| Config | Shell variables | `Config` dataclass (frozen, immutable) |
-| Data models | JSON strings | Pydantic models (`Instance`, `RunManifest`, `Attempt`, etc.) |
-| Dataset | Inline Python in bash | `DatasetCache` class + `fetch_and_cache_dataset()` |
-| Bundles | `bash build_bundle.sh` | `BundleBuilder.build_agent()` |
-| Docker | subprocess calls | `DockerOps` class with clean API |
-| Runs | Flat output dirs | Manifest-based: `runs/<run_id>/tasks/<iid>/attempt-NNN/` |
-| Tests | Bash scripts (157 tests) | pytest (140 unit tests, porting integration) |
-
----
-
-## Running Tests
-
-```bash
-# All unit tests
-.venv/swebench/bin/python -m pytest tests/unit/ -v
-
-# Specific module
-.venv/swebench/bin/python -m pytest tests/unit/test_manifest.py -v
-
-# With coverage
-.venv/swebench/bin/python -m pytest tests/unit/ --cov=swebench_orchestrator --cov-report=term-missing
-```
-
-## Next Immediate Steps
-
-1. **Final cleanup** ✅ — All bash tests have Python equivalents
-2. **E2E with real Docker** — Add optional Docker-based E2E tests (when Docker available)
-3. **Documentation** — Add docstrings, README updates
-4. **Performance** — Benchmark and optimize hot paths
+The `gage/refactor-python-doc-audit` branch updates repository documentation
+only. Runtime fixes, test rewrites, ignore changes, generated-file removal, and
+agent ports belong in separate follow-up branches after review.

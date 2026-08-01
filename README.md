@@ -1,152 +1,166 @@
 # SWE-bench Agent Harness
 
 Run self-contained coding-agent bundles against **SWE-bench Verified** tasks,
-collect patches, and evaluate them with the official SWE-bench harness. The
-included `pi` adapter uses the same local llama.cpp model so results can be
-compared across agents without sharing output state.
+collect patches, and evaluate them with the official SWE-bench harness.
 
-## Architecture
+> [!IMPORTANT]
+> `refactor-python` is an experimental rewrite branch. The Python package is
+> present alongside the legacy Bash orchestrator; `run.sh` has not been replaced
+> by, and does not delegate to, the Python CLI. Treat the Python path as under
+> review until the blockers in [TODO.md](TODO.md) are resolved.
+
+## Safety status
+
+- Do **not** run either implementation's `cleanup-partial` command. The current
+  directory traversal can remove an entire agent output tree.
+- Do not run global cleanup while another harness process is active. Cleanup
+  targets shared `swe_*` containers and SWE-bench images.
+- Python timeout and container-error paths do not yet guarantee that partial
+  container artifacts are copied before removal.
+- The Python runner's output mount and `SWE_OUTPUT_ROOT` currently disagree,
+  producing a duplicated agent path. Do not rely on a model-backed Python run
+  until that contract is fixed and covered by an exact-arguments test.
+
+These warnings describe the current branch; they are not usage recommendations.
+
+## What is implemented
 
 ```text
 swe-bench/
-├── run.sh                         # Build, run, evaluate, summarize
+├── run.sh                         # Legacy Bash orchestrator (still active)
+├── pyproject.toml                 # Python package and CLI entry point
+├── src/swebench_orchestrator/
+│   ├── cli.py                     # Click command group
+│   ├── config.py                  # Immutable configuration
+│   ├── models.py                  # Pydantic data models
+│   ├── dataset.py                 # Dataset cache and Hugging Face loading
+│   ├── bundles.py                 # Agent discovery and bundle builds
+│   ├── docker_ops.py              # Docker subprocess boundary
+│   ├── manifest.py                # Run and attempt metadata
+│   ├── runner.py                  # Run, eval, and summary orchestration
+│   └── storage.py                 # Disk and Docker cleanup helpers
 ├── agents/
-│   ├── pi/                        # Pi CLI, local-provider config, entrypoint
-│   └── codex/                     # Codex CLI, local-provider config, entrypoint
-├── tests/test_harness.sh          # Host-side harness contract tests
-└── workspace/outputs/
-    ├── pi/<instance_id>/          # Pi artifacts
-    └── codex/<instance_id>/       # Codex artifacts
+│   └── pi/                        # Only agent adapter on this branch
+├── tests/
+│   ├── unit/                      # 140 Python test functions
+│   ├── integration/               # 157 Python test functions
+│   └── t*.sh                      # Legacy Bash behavior suites
+├── workspace/outputs/             # Flat working/evaluation artifacts
+└── runs/                          # Python manifest and attempt metadata
 ```
 
-Each agent is built as a relocatable bundle under `agents/<agent>/bundle/`.
-`run.sh` mounts the selected bundle read-only at `/agent` in the official
-per-instance SWE-bench image. The image's repository is already checked out at
-`/testbed`; the agent edits it and the entrypoint extracts a staged binary diff.
+The latest branch commit reports 297 Python tests passing (140 unit and 157
+integration). This documentation update confirms the static test inventory but
+does not re-run it. The branch currently has no CI workflow, so passing status
+must be re-established in a controlled environment before merge.
 
-## Prerequisites
+## Entrypoints
 
-- Docker Desktop using the WSL 2 engine, with this Ubuntu distribution enabled
-  under **Settings > Resources > WSL Integration**.
-- A local OpenAI-compatible model server reachable from containers at
-  `http://host.docker.internal:11434/v1`.
-- The configured model id is `qwen3.6-35b-a3b`, with the intentionally fake
-  bearer token `local-key`.
+### Legacy Bash
 
-Verify Docker from the same WSL shell before running the harness:
+The established interface remains flag-based:
 
 ```bash
-docker version
-docker run --rm hello-world
-```
-
-If `/usr/bin/docker` starts returning an I/O error even though integration was
-already enabled, quit Docker Desktop, run `wsl --shutdown` in Windows
-PowerShell, reopen Docker Desktop, wait for it to report that the engine is
-running, then reopen Ubuntu and repeat the two Docker checks above.
-
-## Quick Start
-
-Index the 500 verified instances and build both bundles:
-
-```bash
+./run.sh --help
 ./run.sh --index
-./run.sh --build
-```
-
-Build only one agent, or force a fresh rebuild:
-
-```bash
-./run.sh --build codex
-./run.sh --rebuild pi
-```
-
-Run either agent on the same instance:
-
-```bash
+./run.sh --build pi
 ./run.sh --run pi django__django-7530
-./run.sh --run codex django__django-7530
 ```
 
-Run the full dataset with an enforced per-instance timeout. `--resume` skips
-only existing results for the selected agent:
+### Experimental Python CLI
+
+The Python interface uses Click **subcommands**, not Bash-style command flags.
+For an isolated development installation:
 
 ```bash
-./run.sh --run-all codex --timeout 3600 --resume
+python3 -m venv .venv/orchestrator
+.venv/orchestrator/bin/pip install -e '.[dev]'
+.venv/orchestrator/bin/swebench-orchestrator --help
 ```
 
-Install and invoke the official evaluator, then compare summaries:
+Representative syntax:
 
 ```bash
-./run.sh --init
-./run.sh --eval pi
-./run.sh --eval codex
-./run.sh --summarize
-./run.sh --status
+swebench-orchestrator index
+swebench-orchestrator list django
+swebench-orchestrator build pi
+swebench-orchestrator rebuild pi
+swebench-orchestrator run pi django__django-7530 --timeout 3600
+swebench-orchestrator run-all pi --timeout 3600 --resume
+swebench-orchestrator eval pi
+swebench-orchestrator summarize pi
+swebench-orchestrator status pi
+swebench-orchestrator interactive pi django__django-7530
 ```
 
-Use `./run.sh --help` for the complete command and environment-variable list.
+The CLI also exposes `init`, `cleanup`, and `cleanup-partial`. The cleanup
+commands are intentionally omitted from the examples because their safety and
+concurrency contracts require correction and direct contract tests.
 
-## Output Contract
+## Current agent support
+
+Only the `pi` adapter is present on this branch. Documentation or examples that
+refer to an `agents/codex/` directory are stale. A Codex adapter exists only in
+the separate archived development history and must be ported selectively after
+the Python agent and output contracts stabilize; that history must not be
+merged wholesale into this branch.
+
+See [agents/agents.md](agents/agents.md) for the source/bundle contract.
+
+## State and output layouts
+
+Two layouts currently coexist:
+
+1. `workspace/outputs/<agent>/<instance_id>/` is the flat operational layout
+   used for patches, results, summaries, predictions, and evaluation reports.
+2. `runs/<run_id>/tasks/<instance_id>/attempt-NNN/` records Python run and
+   attempt metadata.
+
+The attempt tree does not yet own a complete immutable copy of each attempt's
+artifacts. Reruns can still update the flat output directory. Until artifact
+isolation is implemented, manifests should be treated as metadata rather than
+as a complete provenance store.
+
+The intended per-instance output contract includes:
 
 ```text
-workspace/outputs/<agent>/<instance_id>/
-├── meta.json                 # Instance, agent, repository, and base commit
-├── problem_statement.txt     # Original SWE-bench issue
-├── agent_output.txt          # Agent's final/plain output
-├── pi-sessions/              # Pi session state (Pi only)
-├── patch.diff                # Binary-safe staged diff, including new files
-├── result.json               # Run status, timings, exit codes, evaluation
-└── eval/                     # Per-instance evaluation artifacts
+patch.diff
+result.json
+meta.json
+agent_output.txt
+problem_statement.txt
 ```
 
-Possible pre-evaluation statuses include `patch_collected`, `no_patch`,
-`agent_error`, `container_error`, and `timed_out`. `--eval` adds `local_eval`
-and promotes the status to `resolved`, `failed`, or `error` while preserving
-the original agent metadata.
+Agent-specific session and evaluation directories may also be present.
 
-Aggregate files such as `predictions.jsonl`, `summary.json`, and evaluator
-reports stay inside `workspace/outputs/<agent>/`. This prevents a Pi run from
-being mistaken for, overwritten by, or evaluated as a Codex run.
+## Configuration and runtime limits
 
-## Container Runtime
+The Python implementation requires Python 3.10 or newer. Its declared runtime
+dependencies are Click, datasets, docker, GitPython, Pydantic, and
+python-dotenv.
 
-Each instance has a pre-built swebench image:
-```
-swebench/sweb.eval.x86_64.django_1776_django-7530:latest
-```
+`SWE_WORKSPACE_DIR` is the environment override currently read by `Config`.
+Other settings are constructor/default values until environment parsing is
+implemented and tested.
 
-`run.sh` spins up that image with:
-1. Agent bundle mounted read-only at `/agent`
-2. Outputs written to internal `/workspace/outputs/<agent>/<instance_id>/`
-3. Cached repos in `/tmp/repos` (tmpfs, ephemeral)
-4. Calls `/agent/entrypoint.sh` as the container command
+The current Python Docker command requests:
 
-After the container exits, `run.sh` uses `docker cp` to copy outputs out to
-the host. This avoids uid/gid permission issues — no bind mount for outputs,
-no `chmod` workarounds needed. If a container dies too violently for `docker cp`
-(e.g., OOM kill), the output is lost but the work is re-runnable.
+- 32 GB memory and 64 GB memory-plus-swap
+- 500 PID limit
+- a 2 GB `/tmp` tmpfs with `noexec,nosuid`
+- all Linux capabilities dropped
+- `no-new-privileges:true`
 
-## Security Hardening
+These are implementation facts, not yet a validated portability profile.
 
-Containers are intentionally locked down:
-- **Dropped all capabilities** — no extra caps added
-- **No new privileges** — `no-new-privileges:true`
-- **Read-only root filesystem** — `--read-only`
-- **Memory limit** — 8 GB RAM + 16 GB swap, 500 PID limit
-- **tmpfs mounts** — `/tmp` is tmpfs with `noexec,nosuid`
+## Registry helper
 
-## Cleanup
+`push.sh` is not a Git helper. It builds matching local Docker images for
+`linux/amd64` and pushes them to `docker-registry.sterling.digital`. Running it
+changes external registry state and requires explicit operator intent.
 
-`./run.sh --cleanup` is deliberately narrow: it removes only containers named
-`swe_*` and images whose repository begins with `swebench/sweb.`. It does not
-prune or remove unrelated Docker resources.
+## Review references
 
-## Configuration
-
-### LlamaCPP / Local Model
-- **Endpoint:** `http://host.docker.internal:11434/v1` (from inside Docker)
-- **API Key:** `local-key` — bogus/fake key, safe to publish
-
-## Git Remote
-- **origin:** https://github.com/SterlingNerd/swe-bench.git
+- [TODO.md](TODO.md) — audited status and blockers
+- [TESTPLAN.md](TESTPLAN.md) — Python contract gates and legacy Bash baseline
+- [agents/agents.md](agents/agents.md) — agent source and bundle contract

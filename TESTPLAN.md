@@ -1,12 +1,128 @@
-# Test Plan: SWE-bench Orchestrator (`run.sh`)
+# Test Plan: SWE-bench Orchestrator
 
-## Overview
+## Branch status
 
-This plan covers test coverage for all 30+ functions in `run.sh` (1273 lines). Tests are organized by dependency level so they can be run incrementally — no Docker required for the foundational layer.
+This document separates the experimental Python rewrite from the legacy Bash
+baseline. The latest `refactor-python` commit reports 297 Python tests passing:
+140 unit and 157 integration test functions. This documentation-only update
+confirms the static inventory but does not execute the suite. The branch has no
+CI workflow, so the reported result is not yet a merge gate.
+
+The Python implementation must not be considered behaviorally equivalent to
+`run.sh` merely because a test with a matching feature name exists. Contract
+tests must call production entrypoints and assert observable arguments, file
+effects, cleanup boundaries, and ordering.
+
+## Python validation tiers
+
+| Tier | Scope | External effects |
+|---|---|---|
+| P0 | Models, configuration, dataset parsing, path derivation | None |
+| P1 | CLI, manifests, bundles, runner behavior with fakes | Temporary files only |
+| P2 | Exact Docker command and lifecycle contracts with a recording fake | No Docker daemon |
+| P3 | Optional real-Docker lifecycle tests | Local Docker resources |
+| P4 | Model-backed SWE-bench canary and official evaluation | Docker, model server, evaluator |
+
+Real-Docker and model-backed tiers must be opt-in and reported separately from
+the deterministic unit/integration gate.
+
+## Required Python contract suites
+
+### 1. Output mount and copy contract
+
+- Invoke the production runner with a recording `DockerOps` implementation.
+- Assert the exact host mount, container mount, `SWE_OUTPUT_ROOT`, and
+  `docker cp` source path.
+- Prove that one agent and one instance component appear in the host path—never
+  a doubled-agent directory.
+- Exercise success, no-patch, agent failure, container failure, timeout, and
+  copy failure.
+
+### 2. Cleanup boundaries
+
+- Invoke the real Click `cleanup-partial` command against a temporary tree with
+  multiple agents, complete instances, incomplete instances, eval data, logs,
+  and unrelated siblings.
+- Prove that complete instances, agent roots, the output root, and unrelated
+  files survive.
+- Test legacy flat outputs and manifest attempts independently.
+- Verify that global Docker cleanup refuses or safely scopes concurrent work.
+
+### 3. Timeout, error, and signal artifacts
+
+- Assert operation ordering: inspect/copy or retain artifacts before container
+  removal on timeout and error.
+- Install production SIGINT/SIGTERM handlers and exercise them in a subprocess;
+  do not install a handler only inside the test.
+- Prove that only the active container is stopped and that partial logs,
+  sessions, metadata, results, and patches remain recoverable.
+
+### 4. Process locking
+
+- Start two production CLI processes against the same lock path.
+- Prove that exactly one acquires the lock and that the loser does not stop or
+  remove the winner's container.
+- Cover normal exit, exception, SIGINT, and stale lock-file recovery.
+
+### 5. Batch manifests and immutable attempts
+
+- Prove that one `run-all` invocation creates one run ID.
+- Prove that all instances are attempts under that run.
+- Rerun one instance and verify a new attempt preserves the first attempt's
+  patch, result, logs, and metadata unchanged.
+- Define and test resume behavior from manifest/attempt state.
+
+### 6. Evaluation isolation
+
+- Generate different patches for the same agent/instance in two runs.
+- Prove predictions, evaluator `run_id`, reports, and folded results cannot
+  collide.
+- Verify that folding updates only the selected run's attempt artifacts.
+
+### 7. CLI and documentation parity
+
+- Use Click's runner to assert the actual subcommands: `index`, `list`, `build`,
+  `rebuild`, `run`, `run-all`, `eval`, `summarize`, `status`, `init`,
+  `interactive`, `cleanup`, and `cleanup-partial`.
+- Reject stale Bash-style Python forms such as `swebench-orchestrator --run`.
+- Check README examples against the generated help surface.
+- Verify that agent discovery reports only adapters present in the tree.
+
+## Test-quality rules
+
+- A behavior test must invoke the production function or CLI path responsible
+  for that behavior.
+- Mock at system boundaries, not at the behavior under test.
+- Assertions must cover destructive scope and call ordering, not just return
+  values.
+- Tests that merely create a file, install a local signal handler, or call a
+  mock directly do not establish production behavior.
+- Every regression test must fail against the buggy implementation it guards.
+
+## Python acceptance gate
+
+The rewrite is eligible for integration review only when:
+
+1. all P0-P2 tests pass in CI;
+2. cleanup and artifact-preservation regressions exercise production paths;
+3. optional Docker results and skips are reported explicitly;
+4. a model-backed canary completes without output-path duplication;
+5. two-run evaluation demonstrates artifact and report isolation; and
+6. README/TODO status matches the tested behavior.
 
 ---
 
-## Test Categories
+# Legacy Bash Baseline: `run.sh`
+
+The remainder of this document is the historical behavior plan for the Bash
+orchestrator. It remains useful as a parity checklist while `run.sh` is still
+present, but it does not demonstrate that the Python rewrite implements or
+tests the same behavior.
+
+The legacy plan covers 30+ functions in `run.sh`. Tests are organized by
+dependency level so foundational behavior can run without Docker.
+
+## Legacy test categories
 
 | Category | Scope | Docker Required? |
 |----------|-------|------------------|
