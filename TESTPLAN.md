@@ -3,10 +3,12 @@
 ## Branch status
 
 This document separates the experimental Python rewrite from the legacy Bash
-baseline. The latest `refactor-python` commit reports 297 Python tests passing:
-140 unit and 157 integration test functions. This documentation-only update
-confirms the static inventory but does not execute the suite. The branch has no
-CI workflow, so the reported result is not yet a merge gate.
+baseline. An isolated audit of `refactor-python` commit `3853fe0` collected 297
+tests: all 140 unit tests passed. With the ten real-Docker tests excluded,
+integration produced 137 passes and 10 failures because the mocked runner tests
+still reached real Docker image operations. The Docker tests were not run. The
+branch has no CI workflow, so the 297-pass claim was not reproduced and is not
+a merge gate. See the [full audit](docs/audits/pr7-refactor-python-3853fe0.md).
 
 The Python implementation must not be considered behaviorally equivalent to
 `run.sh` merely because a test with a matching feature name exists. Contract
@@ -31,12 +33,17 @@ the deterministic unit/integration gate.
 ### 1. Output mount and copy contract
 
 - Invoke the production runner with a recording `DockerOps` implementation.
+- Assert the fully composed `docker run` argv contains the image exactly once
+  and `/agent/entrypoint.sh` immediately follows it.
 - Assert the exact host mount, container mount, `SWE_OUTPUT_ROOT`, and
   `docker cp` source path.
 - Prove that one agent and one instance component appear in the host path—never
   a doubled-agent directory.
+- Apply the same fixture to legacy `run.sh`, which currently shares the mount
+  mismatch, until one frontend delegates to the other.
 - Exercise success, no-patch, agent failure, container failure, timeout, and
   copy failure.
+- Reject an empty copied directory or missing/invalid `result.json` as success.
 
 ### 2. Cleanup boundaries
 
@@ -71,6 +78,12 @@ the deterministic unit/integration gate.
 - Rerun one instance and verify a new attempt preserves the first attempt's
   patch, result, logs, and metadata unchanged.
 - Define and test resume behavior from manifest/attempt state.
+- Create two instances that both have `attempt-001`; prove result updates use
+  the intended `(run, instance, attempt)` and an unknown attempt raises.
+- Delete a lower attempt suffix and race two creators; prove IDs are not reused
+  and existing metadata is unchanged.
+- Fault state publication before rename and race disjoint updates; prove JSON
+  remains valid and neither update is lost.
 
 ### 6. Evaluation isolation
 
@@ -78,6 +91,10 @@ the deterministic unit/integration gate.
 - Prove predictions, evaluator `run_id`, reports, and folded results cannot
   collide.
 - Verify that folding updates only the selected run's attempt artifacts.
+- Invoke the actual Click command with quotes, newlines, and backslashes in a
+  patch; require every predictions line to parse with `json.loads`.
+- Assert multiple evaluator instance IDs are separate argv elements, matching
+  the official harness's space-separated `--instance_ids` contract.
 
 ### 7. CLI and documentation parity
 
@@ -109,6 +126,22 @@ The rewrite is eligible for integration review only when:
 4. a model-backed canary completes without output-path duplication;
 5. two-run evaluation demonstrates artifact and report isolation; and
 6. README/TODO status matches the tested behavior.
+
+## Audit baseline at `3853fe0`
+
+The deterministic baseline observed on Python 3.12.3 was:
+
+```text
+collection:                         297 collected
+unit:                               140 passed
+integration excluding Docker E2E:  137 passed, 10 failed
+real-Docker integration:            10 not run
+```
+
+The ten failures occur in `test_runner_mocked.py` before their intended runner
+assertions because the fake inherits production image inspection/pull methods.
+The next validation run must first make that suite hermetic, then retain the
+failure evidence until a clean rerun and CI reproduce the complete result.
 
 ---
 

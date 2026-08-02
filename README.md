@@ -7,7 +7,8 @@ collect patches, and evaluate them with the official SWE-bench harness.
 > `refactor-python` is an experimental rewrite branch. The Python package is
 > present alongside the legacy Bash orchestrator; `run.sh` has not been replaced
 > by, and does not delegate to, the Python CLI. Treat the Python path as under
-> review until the blockers in [TODO.md](TODO.md) are resolved.
+> review until the blockers in [TODO.md](TODO.md) are resolved. The detailed
+> review is [anchored to PR #7 commit `3853fe0`](docs/audits/pr7-refactor-python-3853fe0.md).
 
 ## Safety status
 
@@ -15,11 +16,18 @@ collect patches, and evaluate them with the official SWE-bench harness.
   directory traversal can remove an entire agent output tree.
 - Do not run global cleanup while another harness process is active. Cleanup
   targets shared `swe_*` containers and SWE-bench images.
-- Python timeout and container-error paths do not yet guarantee that partial
-  container artifacts are copied before removal.
-- The Python runner's output mount and `SWE_OUTPUT_ROOT` currently disagree,
-  producing a duplicated agent path. Do not rely on a model-backed Python run
-  until that contract is fixed and covered by an exact-arguments test.
+- Both timeout and container-error paths remove the container without first
+  normalizing partial artifacts into the canonical result directory.
+- Both work frontends currently pair an agent-specific host mount with an
+  agent-qualified `SWE_OUTPUT_ROOT`, producing a duplicated agent path. Do not
+  rely on a model-backed run until the Bash and Python contracts are reconciled
+  and covered by exact-arguments tests.
+- The Python runner currently supplies the Docker image twice, causing Docker
+  to treat the second image name as the container command. Do not use the
+  Python work path until this is fixed and tested through `Runner`.
+- The public Python `eval` path currently emits invalid JSONL for ordinary
+  patches and reuses agent-only output namespaces. Treat evaluation output as
+  unqualified until the CLI delegates to one isolated runner path.
 
 These warnings describe the current branch; they are not usage recommendations.
 
@@ -42,17 +50,19 @@ swe-bench/
 ├── agents/
 │   └── pi/                        # Only agent adapter on this branch
 ├── tests/
-│   ├── unit/                      # 140 Python test functions
-│   ├── integration/               # 157 Python test functions
+│   ├── unit/                      # 140 tests collected
+│   ├── integration/               # 157 tests collected
 │   └── t*.sh                      # Legacy Bash behavior suites
 ├── workspace/outputs/             # Flat working/evaluation artifacts
 └── runs/                          # Python manifest and attempt metadata
 ```
 
-The latest branch commit reports 297 Python tests passing (140 unit and 157
-integration). This documentation update confirms the static test inventory but
-does not re-run it. The branch currently has no CI workflow, so passing status
-must be re-established in a controlled environment before merge.
+An isolated audit of commit `3853fe0` collected 297 Python tests (140 unit and
+157 integration) and passed all 140 unit tests. With the ten real-Docker tests
+excluded, integration produced 137 passes and 10 failures because the mocked
+runner tests still reached real Docker image operations. The real-Docker tests
+were not run. The branch has no CI workflow or reported status checks, so the
+297-pass claim was not reproduced and is not a merge gate.
 
 ## Entrypoints
 
@@ -164,3 +174,5 @@ changes external registry state and requires explicit operator intent.
 - [TODO.md](TODO.md) — audited status and blockers
 - [TESTPLAN.md](TESTPLAN.md) — Python contract gates and legacy Bash baseline
 - [agents/agents.md](agents/agents.md) — agent source and bundle contract
+- [PR #7 audit at `3853fe0`](docs/audits/pr7-refactor-python-3853fe0.md) —
+  severity, evidence, impact, regression tests, and minimal suggested fixes

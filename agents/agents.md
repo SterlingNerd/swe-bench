@@ -65,6 +65,12 @@ changing the required files.
 
 ## Current output-contract blocker
 
+Before reaching the output contract, the experimental Python runner also
+constructs an invalid Docker argv: both `Runner` and `DockerOps` insert the
+image, yielding `docker run ... IMAGE IMAGE /agent/entrypoint.sh ...`. The
+second image is treated as the container command. The command-composition and
+output-layout fixes must be validated together through the production runner.
+
 The intended host mapping is one agent directory mounted at one neutral
 container output root:
 
@@ -75,15 +81,17 @@ variable:  SWE_OUTPUT_ROOT=/workspace/outputs
 result:    workspace/outputs/<agent>/<instance_id>/
 ```
 
-The experimental Python runner does not currently satisfy that mapping. It
-mounts the host agent directory at `/workspace/outputs` while setting
+Neither current work frontend satisfies that mapping. The experimental Python
+runner and legacy `run.sh` both mount the host agent directory at
+`/workspace/outputs` while setting
 `SWE_OUTPUT_ROOT=/workspace/outputs/<agent>`, which can create
-`<agent>/<agent>/<instance_id>` on the host. The copy path follows the doubled
-container path and therefore does not prove that the host layout is correct.
+`<agent>/<agent>/<instance_id>` on the host. Their copy paths follow the
+doubled container path and therefore do not prove that the host layout is
+correct.
 
-Do not treat a model-backed Python run as qualified until the mount,
-environment, entrypoint output, and copy source are asserted together by a
-production-path contract test.
+Do not treat a model-backed run through either frontend as qualified until the
+mount, environment, entrypoint output, and copy source are asserted together by
+a production-path contract test.
 
 ## Build rule
 
@@ -133,3 +141,5 @@ After the generic Python contracts stabilize:
 - [../README.md](../README.md) — branch status, entrypoints, and layouts
 - [../TODO.md](../TODO.md) — blockers and selective-port plan
 - [../TESTPLAN.md](../TESTPLAN.md) — required agent/output contract tests
+- [../docs/audits/pr7-refactor-python-3853fe0.md](../docs/audits/pr7-refactor-python-3853fe0.md)
+  — complete PR #7 audit and suggested regression contracts
