@@ -308,7 +308,19 @@ def eval(ctx: click.Context, agent: str) -> None:
 
     click.echo(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=str(eval_dir))
-    ctx.exit(result.returncode)
+    if result.returncode != 0:
+        click.echo("ERROR: swebench harness failed.", err=True)
+        ctx.exit(result.returncode)
+
+    # Fold harness results back into each instance's result.json
+    from swebench_orchestrator.runner import find_harness_report, fold_harness_results
+
+    report_data = find_harness_report(eval_dir)
+    if report_data:
+        folded = fold_harness_results(eval_dir, report_data)
+        click.echo(f"Folded harness results for {folded} instance(s).")
+    else:
+        click.echo("WARNING: No harness report found — results not folded into result.json", err=True)
 
 
 @main.command()
