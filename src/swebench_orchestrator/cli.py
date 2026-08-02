@@ -154,6 +154,12 @@ def rebuild(ctx: click.Context, scope: str) -> None:
     builder = BundleBuilder(config.agents_dir)
 
     if scope != "all":
+        agent_dir = config.agents_dir / scope
+        if not agent_dir.is_dir():
+            click.echo(f"ERROR: Unknown rebuild target '{scope}'. Available agents:", err=True)
+            for a in builder.available_agents:
+                click.echo(f"  {a}", err=True)
+            ctx.exit(1)
         try:
             success = builder.rebuild_agent(scope)
             if not success:
@@ -161,10 +167,6 @@ def rebuild(ctx: click.Context, scope: str) -> None:
                 ctx.exit(1)
         except ValueError as e:
             click.echo(f"ERROR: {e}", err=True)
-            available = builder.available_agents
-            click.echo(f"ERROR: Unknown rebuild target '{scope}'. Available agents:")
-            for a in available:
-                click.echo(f"  {a}")
             ctx.exit(1)
     else:
         builder.rebuild_all()
@@ -269,12 +271,18 @@ def eval(ctx: click.Context, agent: str) -> None:
         ctx.exit(1)
 
     # Build predictions file
+    import json as _json
+
     preds_file = eval_dir / "predictions.jsonl"
     with open(preds_file, "w") as f:
         for iid in instance_ids:
             patch_path = eval_dir / iid / "patch.diff"
             patch = patch_path.read_text()
-            f.write(f'{{"instance_id": "{iid}", "model_name_or_path": "{agent}", "model_patch": {repr(patch)}}}\n')
+            f.write(_json.dumps({
+                "instance_id": iid,
+                "model_name_or_path": agent,
+                "model_patch": patch,
+            }) + "\n")
 
     click.echo(f"Wrote {len(instance_ids)} predictions to {preds_file}")
     click.echo(f"[EVAL] Running swebench harness on {len(instance_ids)} patch(es) for '{agent}'")
@@ -563,8 +571,9 @@ def cleanup(ctx: click.Context) -> None:
 
 
 @main.command()
+@click.argument("agent", required=False, default=None)
 @click.pass_context
-def cleanup_partial(ctx: click.Context) -> None:
+def cleanup_partial(ctx: click.Context, agent: str | None) -> None:
     """Remove output directories missing result.json or patch.diff."""
     config = ctx.obj["config"]
 
@@ -574,6 +583,8 @@ def cleanup_partial(ctx: click.Context) -> None:
     if config.output_dir.is_dir():
         for d in sorted(config.output_dir.iterdir()):
             if not d.is_dir() or d.name in ("eval", "logs"):
+                continue
+            if agent and d.name != agent:
                 continue
             result_file = d / "result.json"
             patch_file = d / "patch.diff"
@@ -586,7 +597,7 @@ def cleanup_partial(ctx: click.Context) -> None:
                 click.echo(f"  Removing: {d.name}/")
 
     # Check manifest-based runs
-    removed_new = cleanup_partial_attempts(config.runs_dir, dry_run=False)
+    removed_new = cleanup_partial_attempts(config.runs_dir, agent=agent, dry_run=False)
 
     click.echo(f"=== Removed {removed_old + len(removed_new)}, kept {kept_old} complete ===")
 
