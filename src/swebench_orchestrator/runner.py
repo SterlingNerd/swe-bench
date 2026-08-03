@@ -66,6 +66,9 @@ def run_instance(
     Raises:
         ValueError: If agent, bundle, or instance not found.
     """
+    if not isinstance(timeout, int) or timeout < 0:
+        raise ValueError(f"Timeout must be a non-negative integer, got {timeout!r}")
+
     if docker_ops is None:
         docker_ops = DockerOps()
 
