@@ -1,5 +1,6 @@
 """Unit tests for the runner module."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -59,6 +60,111 @@ class TestRunInstance:
                 timeout=3600,
                 cache_file=cache_file,
             )
+
+    def test_negative_timeout_raises(self, tmp_path: Path):
+        """Negative timeout should raise ValueError before any Docker work."""
+        agents_dir = tmp_path / "agents"
+        agent_dir = agents_dir / "pi"
+        bundle_dir = agent_dir / "bundle"
+        agent_dir.mkdir(parents=True)
+        bundle_dir.mkdir(parents=True)
+
+        cache_file = tmp_path / "cache.json"
+        cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        with pytest.raises(ValueError, match="non-negative"):
+            run_instance(
+                agents_dir=agents_dir,
+                agent="pi",
+                instance_id="django__django-11039",
+                output_dir=tmp_path / "outputs",
+                timeout=-1,
+                cache_file=cache_file,
+            )
+
+    def test_zero_timeout_accepted(self, tmp_path: Path):
+        """Timeout of 0 should be accepted (no timeout)."""
+        agents_dir = tmp_path / "agents"
+        agent_dir = agents_dir / "pi"
+        bundle_dir = agent_dir / "bundle"
+        agent_dir.mkdir(parents=True)
+        bundle_dir.mkdir(parents=True)
+
+        cache_file = tmp_path / "cache.json"
+        cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        docker_ops = MagicMock()
+        docker_ops.image_exists.return_value = True
+        # Return failure so copy logic is skipped and function returns cleanly
+        docker_ops.run_container.return_value = MagicMock(
+            status="patch_collected", exit_code=0
+        )
+        docker_ops.copy_from_container.return_value = False
+
+        result = run_instance(
+            agents_dir=agents_dir,
+            agent="pi",
+            instance_id="django__django-11039",
+            output_dir=tmp_path / "outputs",
+            timeout=0,
+            cache_file=cache_file,
+            docker_ops=docker_ops,
+        )
+
+        # Should proceed to Docker run (not raise)
+        assert result is not None
+
+    def test_large_timeout_accepted(self, tmp_path: Path):
+        """Very large timeout should be accepted."""
+        agents_dir = tmp_path / "agents"
+        agent_dir = agents_dir / "pi"
+        bundle_dir = agent_dir / "bundle"
+        agent_dir.mkdir(parents=True)
+        bundle_dir.mkdir(parents=True)
+
+        cache_file = tmp_path / "cache.json"
+        cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        docker_ops = MagicMock()
+        docker_ops.image_exists.return_value = True
+        docker_ops.run_container.return_value = MagicMock(
+            status="patch_collected", exit_code=0
+        )
+        docker_ops.copy_from_container.return_value = False
+
+        result = run_instance(
+            agents_dir=agents_dir,
+            agent="pi",
+            instance_id="django__django-11039",
+            output_dir=tmp_path / "outputs",
+            timeout=999999,
+            cache_file=cache_file,
+            docker_ops=docker_ops,
+        )
+
+        # Should proceed to Docker run (not raise)
+        assert result is not None
 
 
 class TestSummarizeResults:
