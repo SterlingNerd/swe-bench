@@ -1,0 +1,2 @@
+[console_scripts]
+swebench-orchestrator = swebench_orchestrator.cli:main

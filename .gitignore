@@ -17,3 +17,4 @@ __pycache__/
 *.swp
 logs/
 pi.pi.json
+*.tar.gz
