@@ -19,6 +19,7 @@ import click
 from swebench_orchestrator.config import Config
 from swebench_orchestrator.dataset import fetch_and_cache_dataset
 from swebench_orchestrator.docker_ops import DockerOps
+from swebench_orchestrator.locking import LockFile
 from swebench_orchestrator.manifest import (
     cleanup_partial_attempts,
     list_runs,
@@ -68,15 +69,25 @@ def main(ctx: click.Context, verbose: bool) -> None:
     ctx.ensure_object(dict)
     setup_logging(verbose)
 
-    # Install signal handlers for graceful shutdown (Issue #8)
-    setup_signal_handlers()
-
-    # Create config from environment
+    # Acquire single-instance lock (Issue #9)
     repo_root = Path(__file__).parent.parent.parent
     try:
         config = Config.from_env(repo_root)
     except Exception:
         config = Config.from_env()
+
+    lock = LockFile(config.lock_file)
+    try:
+        lock.acquire()
+    except RuntimeError as e:
+        click.echo(f"ERROR: {e}", err=True)
+        ctx.exit(1)
+
+    # Store lock in context so it survives command dispatch
+    ctx.obj["_lock"] = lock
+
+    # Install signal handlers for graceful shutdown (Issue #8)
+    setup_signal_handlers()
 
     ctx.obj["config"] = config
 
@@ -94,6 +105,15 @@ def index(ctx: click.Context) -> None:
     except Exception as e:
         click.echo(f"ERROR: Failed to fetch dataset: {e}", err=True)
         ctx.exit(1)
+
+
+@main.result_callback()
+@click.pass_context
+def release_lock(ctx: click.Context, result: object, **kwargs: object) -> None:
+    """Release the single-instance lock when the CLI exits."""
+    lock = ctx.obj.get("_lock")
+    if lock is not None:
+        lock.release()
 
 
 @main.command()
