@@ -239,6 +239,26 @@ class DockerOps:
                 container_name=container_name,
             )
 
+    def stop_container(self, container_name: str) -> bool:
+        """Stop a Docker container gracefully.
+
+        Args:
+            container_name: Name of the container to stop.
+
+        Returns:
+            True if stop succeeded or container already stopped.
+        """
+        try:
+            result = subprocess.run(
+                ["docker", "stop", container_name],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            return result.returncode == 0 or "No such container" in result.stderr
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+
     def remove_container(self, container_name: str) -> bool:
         """Remove a Docker container (force if needed).
 

@@ -24,6 +24,7 @@ from swebench_orchestrator.manifest import (
     list_runs,
 )
 from swebench_orchestrator.runner import Runner, summarize_results
+from swebench_orchestrator.shutdown import setup_signal_handlers
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -66,6 +67,9 @@ def main(ctx: click.Context, verbose: bool) -> None:
     """
     ctx.ensure_object(dict)
     setup_logging(verbose)
+
+    # Install signal handlers for graceful shutdown (Issue #8)
+    setup_signal_handlers()
 
     # Create config from environment
     repo_root = Path(__file__).parent.parent.parent

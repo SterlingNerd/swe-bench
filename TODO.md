@@ -138,6 +138,16 @@ All major integration test categories ported from bash to Python.
 - ✅ Error handling and statistics tracking
 - ✅ tests/integration/test_run_all.py — 10 tests
 
+### Phase 6: Signal Handling & Graceful Shutdown (P6) ✅ DONE
+
+- ✅ `shutdown.py` module — signal handlers for SIGINT/SIGTERM
+- ✅ `stop_running_containers()` — stops all `swe_*` containers, releases endpoints
+- ✅ `shutdown_handler()` — logs clean shutdown message, exits 130
+- ✅ `setup_signal_handlers()` — installs handlers at CLI entry point
+- ✅ `DockerOps.stop_container()` — graceful container stop
+- ✅ Idempotent shutdown (guard against double-cleanup)
+- ✅ tests/integration/test_signal_handling_integration.py — 16 tests
+
 ### Phase 4: Registry Integration (P4)
 
 - Pull-through registry at `docker-registry.sterling.digital`
