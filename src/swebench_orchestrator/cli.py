@@ -539,7 +539,7 @@ def interactive(ctx: click.Context, agent: str, instance_id: str) -> None:
         ctx.exit(1)
 
     # Determine image
-    image_name = instance_to_image_name(instance_id)
+    image_name = instance_to_image_name(instance_id, registry=config.swebench_registry)
 
     # Pull image if needed
     if not docker_ops.image_exists(image_name):

@@ -42,6 +42,10 @@ class Config:
     def from_env(cls, repo_root: Optional[Path] = None) -> Config:
         """Create a Config from environment and defaults.
 
+        Reads the following environment variables:
+        - MAX_STORAGE_PCT: Disk usage warning threshold (default: 80.0)
+        - SWEBENCH_REGISTRY: Docker registry prefix for swebench images (default: "swebench")
+
         Args:
             repo_root: Override the repository root. Defaults to parent of this file's directory.
         """
@@ -50,7 +54,11 @@ class Config:
             import swebench_orchestrator
             pkg_dir = Path(swebench_orchestrator.__file__).parent.parent.parent
             repo_root = pkg_dir.resolve()
-        return cls(repo_root=repo_root)
+        return cls(
+            repo_root=repo_root,
+            max_storage_pct=float(os.environ.get("MAX_STORAGE_PCT", "80")),
+            swebench_registry=os.environ.get("SWEBENCH_REGISTRY", "swebench"),
+        )
 
     @property
     def docker_run_flags(self) -> list[str]:
