@@ -136,6 +136,17 @@ Containers are intentionally locked down:
 - **Memory limit** — 8 GB RAM + 16 GB swap, 500 PID limit
 - **tmpfs mounts** — `/tmp` is tmpfs with `noexec,nosuid`
 
+## Registry Mirror (Recommended)
+
+Setting up a Docker registry mirror (e.g., [Nerdctl](https://nerdctl.dev/) or
+[Harbor](https://goharbor.io/)) is strongly encouraged to avoid Docker Hub
+rate limits and reduce excessive image downloads. Each SWE-bench instance uses
+a unique image, so a mirror saves both bandwidth and CI time.
+
+Configuring a registry mirror is out of scope for this project — it's a
+host/Docker configuration concern. See your container runtime's documentation
+for setup instructions.
+
 ## Cleanup
 
 `./run.sh --cleanup` is deliberately narrow: it removes only containers named

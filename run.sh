@@ -97,12 +97,6 @@ SWEBENCH_REGISTRY="swebench"
 # Storage management (percentage threshold to trigger cleanup)
 MAX_STORAGE_PCT=${MAX_STORAGE_PCT:-80}
 
-# SWE-bench image cache directory (for Docker images on NAS/external storage)
-# Set this to a path on your NAS to avoid filling local disk with swebench images
-# Images are saved as tarballs and loaded on demand
-# Example: export SWEBENCH_IMAGE_CACHE=/mnt/starcluster/documents/swe-bench-images
-SWEBENCH_IMAGE_CACHE=${SWEBENCH_IMAGE_CACHE:-}
-
 # ==============================================================================
 # STORAGE — check and cleanup disk usage
 # ==============================================================================
@@ -248,33 +242,6 @@ do_cleanup_partial() {
     echo "=== Removed ${removed}, kept ${kept} complete ==="
 }
 
-# Save swebench image to cache (NAS/external storage)
-save_image_to_cache() {
-    local image_name="$1"
-    [ -z "${SWEBENCH_IMAGE_CACHE:-}" ] && return 0
-    local cache_dir="${SWEBENCH_IMAGE_CACHE}/images"
-    mkdir -p "$cache_dir"
-    local safe_name=$(echo "$image_name" | tr '/:' '__')
-    local tar_file="${cache_dir}/${safe_name}.tar"
-    if [ ! -f "$tar_file" ]; then
-        echo "  Saving image to cache: ${safe_name}.tar"
-        docker save "$image_name" -o "$tar_file" 2>/dev/null || true
-    fi
-}
-
-# Load swebench image from cache (NAS/external storage)
-load_image_from_cache() {
-    local image_name="$1"
-    [ -z "$SWEBENCH_IMAGE_CACHE" ] && return 1
-    local safe_name=$(echo "$image_name" | tr '/:' '__')
-    local tar_file="${SWEBENCH_IMAGE_CACHE}/images/${safe_name}.tar"
-    if [ -f "$tar_file" ]; then
-        echo "  Loading image from cache: ${safe_name}.tar"
-        docker load -i "$tar_file" 2>/dev/null && return 0
-    fi
-    return 1
-}
-
 # SWE-bench venv (for harness)
 SWEBENCH_VENV="${REPO_ROOT}/.venv/swebench"
 SWEBENCH_PY="${SWEBENCH_VENV}/bin/python"
@@ -415,12 +382,6 @@ COMMANDS
       can inspect their debug files (agent_output.txt, pi-sessions/) first.
 
 ENVIRONMENT
-  SWEBENCH_IMAGE_CACHE
-      Path to cache swebench Docker images as tarballs (e.g., on NAS).
-      Images are saved after first pull and loaded on demand.
-      Example:
-        export SWEBENCH_IMAGE_CACHE=/mnt/starcluster/documents/swe-bench-images
-      This keeps images off local disk while allowing normal Docker operation.
   MAX_STORAGE_PCT
       Disk usage percentage threshold to trigger cleanup warning (default: 80)
   SWE_WORKSPACE_DIR
@@ -658,17 +619,10 @@ do_run() {
         return 1
     fi
 
-    # Pull the image if not present (try cache first)
+    # Pull the image if not present
     if ! docker image inspect "$image_name" >/dev/null 2>&1; then
-        # Try loading from cache first
-        if load_image_from_cache "$image_name"; then
-            echo "  Loaded from cache: ${image_name}"
-        else
-            echo "Pulling swebench image: ${image_name}..."
-            docker pull "$image_name" 2>&1 | tail -3
-            # Save to cache for next time
-            save_image_to_cache "$image_name"
-        fi
+        echo "Pulling swebench image: ${image_name}..."
+        docker pull "$image_name" 2>&1 | tail -3
     fi
 
     # Keep each agent's artifacts isolated so comparisons cannot overwrite or
@@ -897,17 +851,10 @@ for inst in data:
             break
         fi
 
-        # Pull the image if not present (try cache first)
+        # Pull the image if not present
         if ! docker image inspect "$image_name" >/dev/null 2>&1; then
-            # Try loading from cache first
-            if load_image_from_cache "$image_name"; then
-                echo "  Loaded from cache: ${image_name}"
-            else
-                echo "Pulling swebench image: ${image_name}..."
-                docker pull "$image_name" 2>&1 | tail -3
-                # Save to cache for next time
-                save_image_to_cache "$image_name"
-            fi
+            echo "Pulling swebench image: ${image_name}..."
+            docker pull "$image_name" 2>&1 | tail -3
         fi
 
         # Run instance (do_run handles output dir creation)

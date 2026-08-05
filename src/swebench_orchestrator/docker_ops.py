@@ -120,48 +120,6 @@ class DockerOps:
             logger.error("Timeout pulling image: %s", image_name)
             return False
 
-    def load_image_from_tar(self, tar_path: Path) -> bool:
-        """Load a Docker image from a tar archive.
-
-        Args:
-            tar_path: Path to the tar file.
-
-        Returns:
-            True if load succeeded.
-        """
-        try:
-            result = subprocess.run(
-                ["docker", "load", "-i", str(tar_path)],
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
-            return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
-
-    def save_image_to_tar(self, image_name: str, tar_path: Path) -> bool:
-        """Save a Docker image to a tar archive.
-
-        Args:
-            image_name: Full image name to save.
-            tar_path: Destination path for the tar file.
-
-        Returns:
-            True if save succeeded.
-        """
-        try:
-            tar_path.parent.mkdir(parents=True, exist_ok=True)
-            result = subprocess.run(
-                ["docker", "save", image_name, "-o", str(tar_path)],
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
-            return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
-
     def run_container(
         self,
         image_name: str,

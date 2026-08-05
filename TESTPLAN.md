@@ -41,8 +41,7 @@ This plan covers test coverage for all 30+ functions in `run.sh` (1273 lines). T
 | T0-11 | Default `MAX_STORAGE_PCT=80` | Config variable set to 80 |
 | T0-12 | `MAX_STORAGE_PCT=90 ./run.sh --help` | Env var overrides default |
 | T0-13 | `SWE_WORKSPACE_DIR=/tmp/test ./run.sh --help` | Workspace dir override works |
-| T0-14 | `SWEBENCH_IMAGE_CACHE=/tmp/cache ./run.sh --help` | Cache env var set without error |
-| T0-15 | `HF_DATASET` defaults to `princeton-nlp/SWE-bench_Verified` | Correct default value |
+| T0-14 | `HF_DATASET` defaults to `princeton-nlp/SWE-bench_Verified` | Correct default value |
 | T0-16 | `CACHE_FILE` defaults to `/tmp/swe_verified_cache.json` | Correct default path |
 
 ### 0.3 Storage Check (`check_storage`)
@@ -86,16 +85,6 @@ This plan covers test coverage for all 30+ functions in `run.sh` (1273 lines). T
 |---|------|--------|
 | T0-32 | `release_container` on non-existent container | Returns 0 (no error, `|| true`) |
 | T0-33 | `release_container` on running container | Stops and removes it |
-
-### 0.8 Image Cache Helpers (`save_image_to_cache`, `load_image_from_cache`)
-
-| # | Test | Verify |
-|---|------|--------|
-| T0-34 | `save_image_to_cache` with no `SWEBENCH_IMAGE_CACHE` set | Returns 0 immediately (no-op) |
-| T0-35 | `load_image_from_cache` with no `SWEBENCH_IMAGE_CACHE` set | Returns 1 immediately |
-| T0-36 | `save_image_to_cache` with cache set, tar already exists | Skips save (no duplicate) |
-| T0-37 | `load_image_from_cache` with cache set, tar missing | Returns 1 |
-| T0-38 | `save_image_to_cache` with slashes/colons in image name | Sanitizes to safe filename |
 
 ---
 
@@ -174,8 +163,7 @@ This plan covers test coverage for all 30+ functions in `run.sh` (1273 lines). T
 | T2-07 | Valid agent but no bundle | Prints error suggesting `--build`, exits 1 |
 | T2-08 | Invalid instance_id | Fails at `get_instance`, exits non-zero |
 | T2-09 | Storage check fails (disk full) | Prints warning, returns 1 without running |
-| T2-10 | Image not in cache, pull succeeds | Pulls image, runs container |
-| T2-11 | Image in cache, load succeeds | Loads from cache, skips pull |
+| T2-10 | Image not present locally, pull succeeds | Pulls image, runs container |
 | T2-12 | Container exits 0 | Copies outputs, returns 0 |
 | T2-13 | Container exits non-zero (agent error) | Records `container_error`, removes container, returns non-zero |
 | T2-14 | Timeout (exit 124) | Records `timed_out`, removes container, returns 124 |
@@ -391,7 +379,7 @@ Tests for T3 category (full workflow, requires Docker + dataset).
 
 | Phase | Tests | Effort | Value |
 |-------|-------|--------|-------|
-| **Phase 1** | T0-01 through T0-38 | Small | High — catches bugs before Docker dependency |
+| **Phase 1** | T0-01 through T0-33 | Small | High — catches bugs before Docker dependency |
 | **Phase 2** | T1-01 through T1-26 | Small | High — validates data integrity |
 | **Phase 3** | T2-01 through T2-29 | Medium | Critical — core runtime behavior |
 | **Phase 4** | T2-30 through T2-62 | Medium | Critical — eval, summarize, status |
