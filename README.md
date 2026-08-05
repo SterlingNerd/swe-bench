@@ -9,18 +9,22 @@ compared across agents without sharing output state.
 
 ```text
 swe-bench/
-├── run.sh                         # Build, run, evaluate, summarize
+├── src/swebench_orchestrator/   # Python CLI & orchestrator logic
+│   ├── cli.py                   # Click-based command interface
+│   ├── runner.py                # Container orchestration
+│   ├── docker_ops.py            # Docker lifecycle management
+│   ├── logging_config.py        # Console + file logging (Issue #11)
+│   └── ...
 ├── agents/
-│   ├── pi/                        # Pi CLI, local-provider config, entrypoint
-│   └── codex/                     # Codex CLI, local-provider config, entrypoint
-├── tests/test_harness.sh          # Host-side harness contract tests
+│   ├── pi/                      # Pi CLI, local-provider config, entrypoint
+│   └── codex/                   # Codex CLI, local-provider config, entrypoint
 └── workspace/outputs/
-    ├── pi/<instance_id>/          # Pi artifacts
-    └── codex/<instance_id>/       # Codex artifacts
+    ├── pi/<instance_id>/        # Pi artifacts
+    └── codex/<instance_id>/     # Codex artifacts
 ```
 
 Each agent is built as a relocatable bundle under `agents/<agent>/bundle/`.
-`run.sh` mounts the selected bundle read-only at `/agent` in the official
+The orchestrator mounts the selected bundle read-only at `/agent` in the official
 per-instance SWE-bench image. The image's repository is already checked out at
 `/testbed`; the agent edits it and the entrypoint extracts a staged binary diff.
 
@@ -47,45 +51,51 @@ running, then reopen Ubuntu and repeat the two Docker checks above.
 
 ## Quick Start
 
-Index the 500 verified instances and build both bundles:
+Install dependencies and index the 500 verified instances:
 
 ```bash
-./run.sh --index
-./run.sh --build
+pip install -e ".[dev]"
+swebench-orchestrator --index
+```
+
+Build both agent bundles:
+
+```bash
+swebench-orchestrator --build
 ```
 
 Build only one agent, or force a fresh rebuild:
 
 ```bash
-./run.sh --build codex
-./run.sh --rebuild pi
+swebench-orchestrator --build codex
+swebench-orchestrator --rebuild pi
 ```
 
 Run either agent on the same instance:
 
 ```bash
-./run.sh --run pi django__django-7530
-./run.sh --run codex django__django-7530
+swebench-orchestrator --run pi django__django-7530
+swebench-orchestrator --run codex django__django-7530
 ```
 
 Run the full dataset with an enforced per-instance timeout. `--resume` skips
 only existing results for the selected agent:
 
 ```bash
-./run.sh --run-all codex --timeout 3600 --resume
+swebench-orchestrator --run-all codex --timeout 3600 --resume
 ```
 
 Install and invoke the official evaluator, then compare summaries:
 
 ```bash
-./run.sh --init
-./run.sh --eval pi
-./run.sh --eval codex
-./run.sh --summarize
-./run.sh --status
+swebench-orchestrator --init
+swebench-orchestrator --eval pi
+swebench-orchestrator --eval codex
+swebench-orchestrator --summarize
+swebench-orchestrator --status
 ```
 
-Use `./run.sh --help` for the complete command and environment-variable list.
+Use `swebench-orchestrator --help` for the complete command and environment-variable list.
 
 ## Output Contract
 
@@ -116,13 +126,13 @@ Each instance has a pre-built swebench image:
 swebench/sweb.eval.x86_64.django_1776_django-7530:latest
 ```
 
-`run.sh` spins up that image with:
+The orchestrator spins up that image with:
 1. Agent bundle mounted read-only at `/agent`
 2. Outputs written to internal `/workspace/outputs/<agent>/<instance_id>/`
 3. Cached repos in `/tmp/repos` (tmpfs, ephemeral)
 4. Calls `/agent/entrypoint.sh` as the container command
 
-After the container exits, `run.sh` uses `docker cp` to copy outputs out to
+After the container exits, the orchestrator uses `docker cp` to copy outputs out to
 the host. This avoids uid/gid permission issues — no bind mount for outputs,
 no `chmod` workarounds needed. If a container dies too violently for `docker cp`
 (e.g., OOM kill), the output is lost but the work is re-runnable.
@@ -149,9 +159,22 @@ for setup instructions.
 
 ## Cleanup
 
-`./run.sh --cleanup` is deliberately narrow: it removes only containers named
+`swebench-orchestrator --cleanup` is deliberately narrow: it removes only containers named
 `swe_*` and images whose repository begins with `swebench/sweb.`. It does not
 prune or remove unrelated Docker resources.
+
+## Logging
+
+The orchestrator uses Python's standard `logging` module with both console (stderr)
+and file handlers. Logs are written to `workspace/run.log` by default.
+
+```bash
+# Verbose output (DEBUG level)
+swebench-orchestrator -v --run pi django__django-7530
+
+# Check the log file
+cat workspace/run.log
+```
 
 ## Configuration
 

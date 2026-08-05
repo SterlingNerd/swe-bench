@@ -20,6 +20,7 @@ from swebench_orchestrator.config import Config
 from swebench_orchestrator.dataset import fetch_and_cache_dataset
 from swebench_orchestrator.docker_ops import DockerOps
 from swebench_orchestrator.locking import LockFile
+from swebench_orchestrator.logging_config import setup_logging_from_cli
 from swebench_orchestrator.manifest import (
     cleanup_partial_attempts,
     list_runs,
@@ -29,14 +30,13 @@ from swebench_orchestrator.shutdown import setup_signal_handlers
 
 
 def setup_logging(verbose: bool = False) -> None:
-    """Configure logging based on verbosity level."""
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        stream=sys.stderr,
-    )
+    """Configure logging based on verbosity level.
+
+    Replaces the crude ``exec > >(tee -a "$LOG_FILE") 2>&1`` from run.sh
+    with Python's standard logging module, providing both console (stderr)
+    and file handlers with proper log levels and formatting.
+    """
+    setup_logging_from_cli(verbose=verbose)
 
 
 @click.group()
