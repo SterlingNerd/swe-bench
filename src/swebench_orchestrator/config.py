@@ -23,7 +23,6 @@ class Config:
     cache_file: Path = field(default="/tmp/swe_verified_cache.json")
     hf_dataset: str = "princeton-nlp/SWE-bench_Verified"
     max_storage_pct: float = 80.0
-    swebench_image_cache: Optional[Path] = None
     swebench_venv: Path = field(default=".venv/swebench")
     swebench_py: Path = field(init=False)
     log_file: Path = field(init=False)

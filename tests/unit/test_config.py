@@ -29,11 +29,6 @@ class TestConfig:
         config = Config(repo_root=tmp_path, max_storage_pct=90.0)
         assert config.max_storage_pct == 90.0
 
-    def test_swebench_image_cache(self, tmp_path: Path):
-        cache_path = tmp_path / "cache"
-        config = Config(repo_root=tmp_path, swebench_image_cache=cache_path)
-        assert config.swebench_image_cache == cache_path
-
     def test_docker_run_flags(self, tmp_path: Path):
         config = Config(repo_root=tmp_path)
         flags = config.docker_run_flags
