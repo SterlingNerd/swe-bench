@@ -9,6 +9,8 @@ import pytest
 from swebench_orchestrator.config import Config
 from swebench_orchestrator.runner import (
     Runner,
+    fold_harness_results,
+    run_eval,
     run_instance,
     summarize_results,
 )
@@ -344,3 +346,191 @@ class TestRunnerUsesConfig:
 
             assert result["run"] == 1
             assert result["skipped"] == 0
+
+
+class TestFoldHarnessResults:
+    """Tests for fold_harness_results function."""
+
+    def test_folds_resolved_instance(self, tmp_path: Path):
+        output_dir = tmp_path / "outputs" / "pi"
+        instance_dir = output_dir / "django__django-11039"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "result.json").write_text('{"status": "patch_collected"}')
+
+        report_data = {
+            "resolved_ids": ["django__django-11039"],
+            "unresolved_ids": [],
+            "error_ids": [],
+        }
+        folded = fold_harness_results(output_dir, report_data)
+
+        assert folded == 1
+        result = json.loads((instance_dir / "result.json").read_text())
+        assert result["local_eval"] == "resolved"
+        assert result["status"] == "resolved"
+
+    def test_folds_failed_instance(self, tmp_path: Path):
+        output_dir = tmp_path / "outputs" / "pi"
+        instance_dir = output_dir / "flask__flask-1000"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "result.json").write_text('{"status": "patch_collected"}')
+
+        report_data = {
+            "resolved_ids": [],
+            "unresolved_ids": ["flask__flask-1000"],
+            "error_ids": [],
+        }
+        folded = fold_harness_results(output_dir, report_data)
+
+        assert folded == 1
+        result = json.loads((instance_dir / "result.json").read_text())
+        assert result["local_eval"] == "failed"
+        assert result["status"] == "failed"
+
+    def test_folds_error_instance(self, tmp_path: Path):
+        output_dir = tmp_path / "outputs" / "pi"
+        instance_dir = output_dir / "requests__requests-1234"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "result.json").write_text('{"status": "patch_collected"}')
+
+        report_data = {
+            "resolved_ids": [],
+            "unresolved_ids": [],
+            "error_ids": ["requests__requests-1234"],
+        }
+        folded = fold_harness_results(output_dir, report_data)
+
+        assert folded == 1
+        result = json.loads((instance_dir / "result.json").read_text())
+        assert result["local_eval"] == "error"
+        assert result["status"] == "error"
+
+    def test_skips_missing_result_json(self, tmp_path: Path):
+        output_dir = tmp_path / "outputs" / "pi"
+        # No result.json created for this instance
+
+        report_data = {
+            "resolved_ids": ["django__django-11039"],
+            "unresolved_ids": [],
+            "error_ids": [],
+        }
+        folded = fold_harness_results(output_dir, report_data)
+
+        assert folded == 0
+
+    def test_folds_multiple_instances(self, tmp_path: Path):
+        output_dir = tmp_path / "outputs" / "pi"
+        for iid in ["django__django-11039", "flask__flask-1000"]:
+            instance_dir = output_dir / iid
+            instance_dir.mkdir(parents=True)
+            (instance_dir / "result.json").write_text('{"status": "patch_collected"}')
+
+        report_data = {
+            "resolved_ids": ["django__django-11039"],
+            "unresolved_ids": ["flask__flask-1000"],
+            "error_ids": [],
+        }
+        folded = fold_harness_results(output_dir, report_data)
+
+        assert folded == 2
+
+
+class TestRunEval:
+    """Tests for run_eval function."""
+
+    def test_fold_harness_results_called_once(self, tmp_path: Path):
+        """Verify fold_harness_results is called exactly once (Issue #13)."""
+        output_dir = tmp_path / "outputs" / "pi"
+        instance_dir = output_dir / "django__django-11039"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "result.json").write_text('{"status": "patch_collected"}')
+
+        # Create predictions file
+        preds_file = output_dir / "predictions.jsonl"
+        preds_file.write_text(
+            '{"instance_id": "django__django-11039", "model_patch": "diff --git a/test.py b/test.py\\n+print(1)\\n"}'
+        )
+
+        # Create harness report
+        eval_dir = output_dir / "eval"
+        eval_dir.mkdir(parents=True)
+        report_file = eval_dir / f"{output_dir.name}.{output_dir.name}.json"
+        report_file.write_text(
+            json.dumps({
+                "resolved_ids": ["django__django-11039"],
+                "unresolved_ids": [],
+                "error_ids": [],
+            })
+        )
+
+        with patch("swebench_orchestrator.runner.generate_predictions") as mock_preds:
+            mock_preds.return_value = (preds_file, ["django__django-11039"])
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(returncode=0)
+                result = run_eval(output_dir, "pi", swebench_py=tmp_path / "fake_swebench")
+
+        assert result["status"] == "completed"
+        assert result["folded"] == 1
+        # Verify the instance was updated
+        result_json = json.loads((instance_dir / "result.json").read_text())
+        assert result_json["local_eval"] == "resolved"
+        assert result_json["status"] == "resolved"
+
+    def test_fold_count_matches_return_value(self, tmp_path: Path):
+        """Verify the folded count in return value matches what was actually folded."""
+        output_dir = tmp_path / "outputs" / "pi"
+        for iid in ["django__django-11039", "flask__flask-1000"]:
+            instance_dir = output_dir / iid
+            instance_dir.mkdir(parents=True)
+            (instance_dir / "result.json").write_text('{"status": "patch_collected"}')
+
+        preds_file = output_dir / "predictions.jsonl"
+        preds_file.write_text(
+            '{"instance_id": "django__django-11039", "model_patch": "diff --git a/test.py b/test.py\\n+print(1)\\n"}\n'
+            '{"instance_id": "flask__flask-1000", "model_patch": "diff --git a/test.py b/test.py\\n+print(2)\\n"}'
+        )
+
+        eval_dir = output_dir / "eval"
+        eval_dir.mkdir(parents=True)
+        report_file = eval_dir / f"{output_dir.name}.{output_dir.name}.json"
+        report_file.write_text(
+            json.dumps({
+                "resolved_ids": ["django__django-11039"],
+                "unresolved_ids": ["flask__flask-1000"],
+                "error_ids": [],
+            })
+        )
+
+        with patch("swebench_orchestrator.runner.generate_predictions") as mock_preds:
+            mock_preds.return_value = (preds_file, ["django__django-11039", "flask__flask-1000"])
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(returncode=0)
+                result = run_eval(output_dir, "pi", swebench_py=tmp_path / "fake_swebench")
+
+        assert result["folded"] == 2
+
+    def test_no_harness_report_returns_zero_folded(self, tmp_path: Path):
+        """When no harness report exists, folded should be 0."""
+        output_dir = tmp_path / "outputs" / "pi"
+        instance_dir = output_dir / "django__django-11039"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "result.json").write_text('{"status": "patch_collected"}')
+
+        preds_file = output_dir / "predictions.jsonl"
+        preds_file.write_text(
+            '{"instance_id": "django__django-11039", "model_patch": "diff --git a/test.py b/test.py\\n+print(1)\\n"}'
+        )
+
+        # No eval directory, so no report
+
+        with patch("swebench_orchestrator.runner.generate_predictions") as mock_preds:
+            mock_preds.return_value = (preds_file, ["django__django-11039"])
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(returncode=0)
+                result = run_eval(output_dir, "pi", swebench_py=tmp_path / "fake_swebench")
+
+        assert result["status"] == "completed"
+        assert result["folded"] == 0
+        # Instance should not have been modified
+        result_json = json.loads((instance_dir / "result.json").read_text())
+        assert "local_eval" not in result_json
