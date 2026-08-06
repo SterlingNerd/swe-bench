@@ -63,3 +63,47 @@ class TestConfig:
         config = Config(repo_root=tmp_path)
         with pytest.raises(Exception):  # dataclass frozen raises FrozenInstanceError
             config.hf_dataset = "something-else"
+
+    def test_from_env_reads_max_storage_pct(self, tmp_path: Path):
+        """Config.from_env() should read MAX_STORAGE_PCT from environment."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("MAX_STORAGE_PCT", "90")
+            config = Config.from_env(tmp_path)
+            assert config.max_storage_pct == 90.0
+
+    def test_from_env_reads_max_storage_pct_float(self, tmp_path: Path):
+        """Config.from_env() should handle float values for MAX_STORAGE_PCT."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("MAX_STORAGE_PCT", "75.5")
+            config = Config.from_env(tmp_path)
+            assert config.max_storage_pct == 75.5
+
+    def test_from_env_uses_default_max_storage_pct(self, tmp_path: Path):
+        """Config.from_env() should use default 80.0 when MAX_STORAGE_PCT is not set."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.delenv("MAX_STORAGE_PCT", raising=False)
+            config = Config.from_env(tmp_path)
+            assert config.max_storage_pct == 80.0
+
+    def test_from_env_reads_swebench_registry(self, tmp_path: Path):
+        """Config.from_env() should read SWEBENCH_REGISTRY from environment."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("SWEBENCH_REGISTRY", "my-registry.example.com")
+            config = Config.from_env(tmp_path)
+            assert config.swebench_registry == "my-registry.example.com"
+
+    def test_from_env_uses_default_registry(self, tmp_path: Path):
+        """Config.from_env() should use default 'swebench' when SWEBENCH_REGISTRY is not set."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.delenv("SWEBENCH_REGISTRY", raising=False)
+            config = Config.from_env(tmp_path)
+            assert config.swebench_registry == "swebench"
+
+    def test_from_env_reads_all_env_vars_together(self, tmp_path: Path):
+        """Config.from_env() should read all env vars simultaneously."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("MAX_STORAGE_PCT", "85")
+            mp.setenv("SWEBENCH_REGISTRY", "custom-registry")
+            config = Config.from_env(tmp_path)
+            assert config.max_storage_pct == 85.0
+            assert config.swebench_registry == "custom-registry"

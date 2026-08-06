@@ -178,6 +178,14 @@ cat workspace/run.log
 
 ## Configuration
 
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SWE_WORKSPACE_DIR` | `<repo>/workspace` | Base directory for outputs and logs |
+| `MAX_STORAGE_PCT` | `80` | Disk usage warning threshold (percentage) |
+| `SWEBENCH_REGISTRY` | `swebench` | Docker registry prefix for swebench images |
+
 ### LlamaCPP / Local Model
 - **Endpoint:** `http://host.docker.internal:11434/v1` (from inside Docker)
 - **API Key:** `local-key` — bogus/fake key, safe to publish

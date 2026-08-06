@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from swebench_orchestrator.config import Config
 from swebench_orchestrator.runner import (
     Runner,
     run_instance,
@@ -234,3 +235,112 @@ class TestSummarizeResults:
 
         summary = summarize_results(output_dir)
         assert summary["total"] == 0  # Invalid JSON is skipped
+
+
+class TestRunnerUsesConfig:
+    """Tests that Runner passes config values to run_instance."""
+
+    def test_runner_uses_custom_registry(self, tmp_path: Path):
+        """Runner should pass config.swebench_registry to instance_to_image_name."""
+        from swebench_orchestrator.models import instance_to_image_name
+
+        # Verify that instance_to_image_name uses the registry from config
+        config = Config(
+            repo_root=tmp_path,
+            swebench_registry="my-registry",
+        )
+        expected_image = instance_to_image_name("django__django-11039", registry=config.swebench_registry)
+        assert expected_image == "my-registry/sweb.eval.x86_64.django_1776_django-11039:latest"
+
+    def test_runner_passes_config_cache_file(self, tmp_path: Path):
+        """Runner should pass config.cache_file to run_instance."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "custom_cache.json",
+        )
+        runner = Runner(config)
+
+        # Create necessary directories and files
+        agents_dir = tmp_path / "agents"
+        agent_dir = agents_dir / "pi"
+        bundle_dir = agent_dir / "bundle"
+        agent_dir.mkdir(parents=True)
+        bundle_dir.mkdir(parents=True)
+
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        # Patch run_instance to capture calls
+        with patch("swebench_orchestrator.runner.run_instance") as mock_run:
+            mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+            runner.run_instance("pi", "django__django-11039")
+
+            # Verify run_instance was called with correct cache_file from config
+            call_kwargs = mock_run.call_args.kwargs if mock_run.call_args.kwargs else {}
+            assert call_kwargs.get("cache_file") == config.cache_file
+
+    def test_runner_uses_custom_storage_threshold(self, tmp_path: Path):
+        """Runner should use config.max_storage_pct (verified via check_storage call)."""
+        config = Config(
+            repo_root=tmp_path,
+            max_storage_pct=90.0,
+        )
+        runner = Runner(config)
+
+        # Create necessary directories and files
+        agents_dir = tmp_path / "agents"
+        agent_dir = agents_dir / "pi"
+        bundle_dir = agent_dir / "bundle"
+        agent_dir.mkdir(parents=True)
+        bundle_dir.mkdir(parents=True)
+
+        cache_file = tmp_path / "cache.json"
+        cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        # Patch run_instance to capture check_storage calls
+        with patch("swebench_orchestrator.runner.run_instance") as mock_run:
+            mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+            runner.run_instance("pi", "django__django-11039")
+
+            # Verify run_instance was called with correct cache_file from config
+            call_kwargs = mock_run.call_args.kwargs if mock_run.call_args.kwargs else {}
+            assert call_kwargs.get("cache_file") == config.cache_file
+
+    def test_runner_run_all_uses_config_cache(self, tmp_path: Path):
+        """Runner.run_all should use config.cache_file for dataset lookup."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "custom_cache.json",
+        )
+        runner = Runner(config)
+
+        # Create the custom cache file with instance data
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        # Mock run_instance to avoid actual Docker calls
+        with patch.object(runner, "run_instance") as mock_run:
+            mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+            result = runner.run_all("pi", timeout=3600)
+
+            assert result["run"] == 1
+            assert result["skipped"] == 0

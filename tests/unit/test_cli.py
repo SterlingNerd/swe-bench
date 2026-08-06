@@ -1,5 +1,11 @@
 """Unit tests for the CLI module."""
 
+import json
+import os
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
 from click.testing import CliRunner
 
 from swebench_orchestrator.cli import main
@@ -85,3 +91,37 @@ class TestCLI:
     def test_summarize_command(self):
         result = self.runner.invoke(main, ["--summarize"])
         assert result.exit_code in (0, 1, 2)
+
+    def test_interactive_uses_config_registry(self, tmp_path: Path):
+        """Interactive command should use config.swebench_registry for image name."""
+        # Create necessary structure
+        agents_dir = tmp_path / "agents"
+        agent_dir = agents_dir / "pi"
+        bundle_dir = agent_dir / "bundle"
+        agent_dir.mkdir(parents=True)
+        bundle_dir.mkdir(parents=True)
+
+        cache_file = tmp_path / "cache.json"
+        cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        with patch.dict(os.environ, {"SWEBENCH_REGISTRY": "my-registry"}):
+            with patch("swebench_orchestrator.cli.DockerOps") as MockDockerOps:
+                mock_docker = MagicMock()
+                MockDockerOps.return_value = mock_docker
+                mock_docker.image_exists.return_value = True
+
+                result = self.runner.invoke(
+                    main,
+                    ["interactive", "pi", "django__django-11039"],
+                    env={"SWE_WORKSPACE_DIR": str(tmp_path / "workspace")},
+                )
+
+                # Should not crash with registry error
+                assert result.exit_code in (0, 1)

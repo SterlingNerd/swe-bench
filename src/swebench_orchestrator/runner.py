@@ -40,6 +40,8 @@ def run_instance(
     timeout: int = 3600,
     cache_file: Optional[Path] = None,
     docker_ops: Optional[DockerOps] = None,
+    registry: str = "swebench",
+    threshold_pct: float = 80.0,
 ) -> dict[str, Any]:
     """Run an agent against a single SWE-bench instance.
 
@@ -59,6 +61,8 @@ def run_instance(
         timeout: Maximum runtime in seconds.
         cache_file: Path to dataset cache file.
         docker_ops: DockerOps instance (for testing).
+        registry: Docker registry prefix for swebench images.
+        threshold_pct: Disk usage warning threshold percentage.
 
     Returns:
         Dict with run results including status, elapsed_seconds, etc.
@@ -102,10 +106,10 @@ def run_instance(
     problem_statement = inst_data["problem_statement"]
 
     # Determine swebench image
-    image_name = instance_to_image_name(instance_id)
+    image_name = instance_to_image_name(instance_id, registry=registry)
 
     # Check storage
-    storage_status = check_storage(output_dir)
+    storage_status = check_storage(output_dir, threshold_pct=threshold_pct)
     if storage_status["is_warning"]:
         logger.warning("Disk at %s%% (threshold: %s%%)", storage_status["usage_pct"], storage_status["threshold_pct"])
 
@@ -647,6 +651,8 @@ class Runner:
             timeout=timeout,
             cache_file=self.config.cache_file,
             docker_ops=self.docker_ops,
+            registry=self.config.swebench_registry,
+            threshold_pct=self.config.max_storage_pct,
         )
 
         # Update attempt result
