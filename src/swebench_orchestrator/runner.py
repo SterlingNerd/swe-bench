@@ -585,6 +585,7 @@ def run_eval(
 
     # Find and fold harness results
     report_data = find_harness_report(output_dir)
+    folded = 0
     if report_data:
         folded = fold_harness_results(output_dir, report_data)
         logger.info("Folded %d harness results", folded)
@@ -594,7 +595,7 @@ def run_eval(
     return {
         "status": "completed",
         "instances": len(instance_ids),
-        "folded": fold_harness_results(output_dir, report_data or {}) if report_data else 0,
+        "folded": folded,
     }
 
 
