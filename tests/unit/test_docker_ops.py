@@ -135,3 +135,87 @@ class TestDockerOps:
             mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="swe_test_123\n")
             result = ops.wait_for_container("swe_test_123", timeout_seconds=1)
             assert result is False  # Timed out
+
+
+class TestWaitForAgentContainers:
+    """Tests for wait_for_agent_containers method."""
+
+    def test_returns_true_when_no_containers(self):
+        """Should return True immediately when no agent containers are running."""
+        ops = DockerOps()
+        with patch("swebench_orchestrator.docker_ops.subprocess") as mock_subprocess:
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="")
+            result = ops.wait_for_agent_containers("pi", timeout_seconds=5)
+            assert result is True
+
+    def test_returns_true_when_containers_stop(self):
+        """Should wait and return True once containers stop."""
+        ops = DockerOps()
+        with patch("swebench_orchestrator.docker_ops.subprocess") as mock_subprocess:
+            # First call: container running, second call: gone
+            mock_subprocess.run.side_effect = [
+                MagicMock(returncode=0, stdout="swe_pi_django__django-11039\n"),
+                MagicMock(returncode=0, stdout=""),
+            ]
+            result = ops.wait_for_agent_containers("pi", timeout_seconds=5)
+            assert result is True
+
+    def test_times_out_and_force_kills(self):
+        """Should force-kill containers after timeout."""
+        ops = DockerOps()
+        with patch("swebench_orchestrator.docker_ops.subprocess") as mock_subprocess:
+            # Always returns container running
+            mock_subprocess.run.return_value = MagicMock(
+                returncode=0,
+                stdout="swe_pi_django__django-11039\nswe_pi_flask__flask-1000\n"
+            )
+            result = ops.wait_for_agent_containers("pi", timeout_seconds=1)
+            assert result is False
+            # Should have called docker rm -f for each container
+            rm_calls = [
+                call for call in mock_subprocess.run.call_args_list
+                if isinstance(call.args[0], list) and "rm" in call.args[0] and "-f" in call.args[0]
+            ]
+            assert len(rm_calls) == 2
+
+    def test_releases_endpoints_after_kill(self):
+        """Should release network endpoints after force-killing containers."""
+        ops = DockerOps()
+        with patch("swebench_orchestrator.docker_ops.subprocess") as mock_subprocess:
+            # Always returns container running
+            mock_subprocess.run.return_value = MagicMock(
+                returncode=0,
+                stdout="swe_pi_django__django-11039\n"
+            )
+            result = ops.wait_for_agent_containers("pi", timeout_seconds=1)
+            assert result is False
+            # Should have called docker network disconnect
+            disconnect_calls = [
+                call for call in mock_subprocess.run.call_args_list
+                if "disconnect" in str(call)
+            ]
+            assert len(disconnect_calls) == 1
+
+    def test_logs_wait_progress(self):
+        """Should log progress while waiting."""
+        ops = DockerOps()
+        with patch("swebench_orchestrator.docker_ops.subprocess") as mock_subprocess:
+            # First call: container running, second call: gone
+            mock_subprocess.run.side_effect = [
+                MagicMock(returncode=0, stdout="swe_pi_django__django-11039\n"),
+                MagicMock(returncode=0, stdout=""),
+            ]
+            with patch("swebench_orchestrator.docker_ops.logger") as mock_logger:
+                result = ops.wait_for_agent_containers("pi", timeout_seconds=5)
+                assert result is True
+                # Should have logged something about waiting
+                mock_logger.info.assert_called()
+
+    def test_default_timeout_is_3600(self):
+        """Should use 3600s default timeout."""
+        ops = DockerOps()
+        with patch("swebench_orchestrator.docker_ops.subprocess") as mock_subprocess:
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="")
+            # Should return immediately since no containers
+            result = ops.wait_for_agent_containers("pi")
+            assert result is True
