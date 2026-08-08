@@ -674,6 +674,9 @@ class Runner:
     ) -> dict[str, Any]:
         """Run an agent against all cached instances.
 
+        Before starting, waits for any previously running containers to finish
+        (safety net for interrupted runs).
+
         Args:
             agent: Agent name.
             timeout: Maximum runtime per instance.
@@ -682,6 +685,10 @@ class Runner:
         Returns:
             Dict with run statistics (run, skipped, failed counts).
         """
+        # Safety net: wait for any stale containers from interrupted runs
+        logger.info("Waiting for any running %s containers to finish...", agent)
+        self.docker_ops.wait_for_agent_containers(agent, timeout_seconds=timeout)
+
         # Get all instances from cache
         dataset_cache = DatasetCache(self.config.cache_file)
         instance_ids = [inst["instance_id"] for inst in dataset_cache.data]

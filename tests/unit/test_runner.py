@@ -534,3 +534,89 @@ class TestRunEval:
         # Instance should not have been modified
         result_json = json.loads((instance_dir / "result.json").read_text())
         assert "local_eval" not in result_json
+
+
+class TestRunnerRunAllWaitForContainers:
+    """Tests for run_all wait-for-container safety net (Issue #15)."""
+
+    def test_run_all_waits_for_stale_containers(self, tmp_path: Path):
+        """run_all should wait for stale containers before starting new instances."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "cache.json",
+        )
+        runner = Runner(config)
+
+        # Create the custom cache file with instance data
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        # Mock wait_for_agent_containers to verify it's called
+        with patch.object(runner.docker_ops, "wait_for_agent_containers") as mock_wait:
+            mock_wait.return_value = True
+            with patch.object(runner, "run_instance") as mock_run:
+                mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+                result = runner.run_all("pi", timeout=3600)
+
+                # Verify wait was called before any run_instance calls
+                mock_wait.assert_called_once_with("pi", timeout_seconds=3600)
+                assert result["run"] == 1
+
+    def test_run_all_logs_wait_progress(self, tmp_path: Path):
+        """run_all should log progress while waiting for containers."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "cache.json",
+        )
+        runner = Runner(config)
+
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        with patch.object(runner.docker_ops, "wait_for_agent_containers") as mock_wait:
+            mock_wait.return_value = True
+            with patch.object(runner, "run_instance") as mock_run:
+                mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+                with patch("swebench_orchestrator.runner.logger") as mock_logger:
+                    result = runner.run_all("pi", timeout=3600)
+                    # Should log that it's waiting for containers
+                    mock_logger.info.assert_called()
+
+    def test_run_all_continues_after_wait_timeout(self, tmp_path: Path):
+        """run_all should continue even if wait times out (force-kills happened)."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "cache.json",
+        )
+        runner = Runner(config)
+
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        with patch.object(runner.docker_ops, "wait_for_agent_containers") as mock_wait:
+            # Wait times out (returns False) but run should still proceed
+            mock_wait.return_value = False
+            with patch.object(runner, "run_instance") as mock_run:
+                mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+                result = runner.run_all("pi", timeout=3600)
+
+                # Should still run the instance after force-killing stale containers
+                assert result["run"] == 1

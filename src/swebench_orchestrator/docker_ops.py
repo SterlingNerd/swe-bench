@@ -368,3 +368,52 @@ class DockerOps:
                 return True
             time.sleep(check_interval)
         return False
+
+    def wait_for_agent_containers(
+        self,
+        agent: str,
+        timeout_seconds: int = 3600,
+        check_interval: int = 1,
+    ) -> bool:
+        """Wait for all containers matching the agent prefix to stop.
+
+        This is a safety net for interrupted runs where containers might still
+        be running. It blocks until all swe_<agent>_*/ containers have stopped,
+        or until the timeout is reached (at which point it force-kills them).
+
+        Args:
+            agent: Agent name (e.g., 'pi', 'codex').
+            timeout_seconds: Maximum time to wait before force-killing.
+            check_interval: Seconds between checks.
+
+        Returns:
+            True if all containers stopped within timeout, False if timed out
+            and force-killed.
+        """
+        started_at = time.time()
+        wait_count = 0
+
+        while time.time() - started_at < timeout_seconds:
+            containers = self.list_running_containers(prefix=f"swe_{agent}_")
+            if not containers:
+                logger.info("No %s containers running", agent)
+                return True
+
+            wait_count += 1
+            if wait_count % 6 == 0:
+                logger.info(
+                    "Waiting for %d %s container(s) to finish... (%ds)",
+                    len(containers), agent, wait_count,
+                )
+            time.sleep(check_interval)
+
+        # Timeout reached — force-kill remaining containers
+        containers = self.list_running_containers(prefix=f"swe_{agent}_")
+        if containers:
+            logger.warning(
+                "Timeout waiting for %s containers (%ds). Force-killing %d container(s)",
+                agent, timeout_seconds, len(containers),
+            )
+            for c in containers:
+                self.release_container(c)
+        return False
