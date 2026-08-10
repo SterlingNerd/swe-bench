@@ -219,7 +219,7 @@ def run_instance(
             nested = cp_tmp / instance_id
             if nested.is_dir():
                 for item in nested.iterdir():
-                    dest = instance_output_dir / item.name
+                    dest = instance_output_dir.parent / item.name
                     if dest.exists():
                         import shutil
                         if dest.is_dir():
@@ -229,7 +229,7 @@ def run_instance(
                     item.rename(dest)
                 cp_ok = True
             else:
-                # Copy directly if no nesting
+                # Copy directly if no nesting (files placed directly in cp_tmp)
                 for item in cp_tmp.iterdir():
                     dest = instance_output_dir / item.name
                     if dest.exists():
