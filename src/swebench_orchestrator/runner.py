@@ -215,11 +215,11 @@ def run_instance(
             f"/workspace/outputs/{agent}/{instance_id}",
             cp_tmp,
         ):
-            # Flatten: docker cp nests the instance dir
+            # Flatten: docker cp nests the instance dir (single level).
             nested = cp_tmp / instance_id
             if nested.is_dir():
                 for item in nested.iterdir():
-                    dest = instance_output_dir.parent / item.name
+                    dest = instance_output_dir / item.name
                     if dest.exists():
                         import shutil
                         if dest.is_dir():

@@ -79,25 +79,25 @@ class MockDockerOps(DockerOps):
     def copy_from_container(self, container_name, src_path, dest_path):
         """Simulate docker cp — may fail based on mode.
 
-        Docker cp creates a nested structure: dest/instance_id/instance_id/files
-        The runner's flatten logic removes the outer nesting.
+        Docker cp creates a single-nested structure: dest/instance_id/files
+        (the basename of the source path becomes the subdirectory).
         """
         self._call_log.append({"action": "copy", "container": container_name})
 
         if self.mode == "cp_fail":
             return False
 
-        # Create mock output files with nested structure (like real docker cp)
+        # Create mock output files with single-nested structure (like real docker cp)
         dest_path.mkdir(parents=True, exist_ok=True)
         instance_id = src_path.split("/")[-1]
-        # Nested: dest/instance_id/instance_id/result.json
-        nested_dir = dest_path / instance_id / instance_id
+        # Single nesting: dest/instance_id/result.json
+        nested_dir = dest_path / instance_id
         nested_dir.mkdir(parents=True, exist_ok=True)
 
         (nested_dir / "result.json").write_text(
             '{"status": "patch_collected", "patch_bytes": 42, "elapsed_seconds": 5}'
         )
-        (nested_dir / "patch.diff").write_text("diff --git a/test b/test\n+hello")
+        (nested_dir / "patch.diff").write_text("diff --git a test b/test\n+hello")
         return True
 
     def inspect_container_state(self, container_name):

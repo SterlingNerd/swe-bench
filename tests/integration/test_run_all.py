@@ -37,11 +37,11 @@ class MockDockerOpsForRunAll(DockerOps):
         )
 
     def copy_from_container(self, container_name, src_path, dest_path):
-        """Simulate docker cp with nested structure."""
+        """Simulate docker cp with single-nested structure (real docker cp behavior)."""
         dest_path.mkdir(parents=True, exist_ok=True)
         instance_id = src_path.split("/")[-1]
-        # Nested: dest/instance_id/instance_id/result.json (like real docker cp)
-        nested_dir = dest_path / instance_id / instance_id
+        # Single nesting: dest/instance_id/result.json
+        nested_dir = dest_path / instance_id
         nested_dir.mkdir(parents=True, exist_ok=True)
         (nested_dir / "result.json").write_text(
             '{"status": "patch_collected", "patch_bytes": 42, "elapsed_seconds": 5}'
