@@ -225,6 +225,10 @@ def run_instance(
             f"/workspace/outputs/{agent}/{instance_id}",
             cp_tmp,
         ):
+            # Ensure instance output dir exists (container creates it in real runs,
+            # but mocked tests need us to create it).
+            instance_output_dir.mkdir(parents=True, exist_ok=True)
+
             # Flatten: docker cp nests the instance dir (single level).
             nested = cp_tmp / instance_id
             if nested.is_dir():
