@@ -77,7 +77,7 @@ def run_instance(
         docker_ops = DockerOps()
 
     # Validate agent exists
-    agents_dir = Path(agents_dir)
+    agents_dir = Path(agents_dir).resolve()
     agent_dir = agents_dir / agent
     if not agent_dir.is_dir():
         available = []
@@ -88,7 +88,7 @@ def run_instance(
         )
 
     # Validate bundle exists
-    bundle_dir = agent_dir / "bundle"
+    bundle_dir = agent_dir.resolve() / "bundle"
     if not bundle_dir.is_dir():
         raise ValueError(f"Agent bundle not found at {bundle_dir}. Run --build {agent} first.")
 
@@ -119,10 +119,14 @@ def run_instance(
         if not docker_ops.pull_image(image_name):
             raise RuntimeError(f"Failed to pull image: {image_name}")
 
-    # Prepare output directory
-    agent_output_root = Path(output_dir) / agent
+    # Prepare output directory - only create parent dirs, not instance dir.
+    # The container creates the instance dir (as root), then we fix permissions after copy.
+    # Pre-creating the instance dir causes permission issues: host creates it, container
+    # (root) can't create subdirs inside due to Docker/WSL restrictions.
+    output_dir_resolved = Path(output_dir).resolve()
+    agent_output_root = output_dir_resolved / agent
+    agent_output_root.mkdir(parents=True, exist_ok=True)
     instance_output_dir = agent_output_root / instance_id
-    instance_output_dir.mkdir(parents=True, exist_ok=True)
 
     container_name = f"swe_{agent}_{instance_id}"
 
@@ -131,6 +135,7 @@ def run_instance(
 
     # Build Docker command
     started_at = time.time()
+    import os as _os
     docker_flags = [
         "--memory", "32g",
         "--memory-swap", "64g",
@@ -142,11 +147,12 @@ def run_instance(
         "-e", f"SWE_AGENT_NAME={agent}",
         "-e", f"SWE_OUTPUT_ROOT=/workspace/outputs/{agent}",
         "-v", f"{bundle_dir}:/agent:ro",
-        "-v", f"{agent_output_root}:/workspace/outputs",
+        "-v", f"{output_dir_resolved}:/workspace/outputs",
+        # Run as host user to avoid permission issues with mounted volumes
+        "--user", f"{_os.getuid()}:{_os.getgid()}",
     ]
 
     command = [
-        image_name,
         "/agent/entrypoint.sh",
         instance_id,
         f"https://github.com/{repo_url}",
@@ -173,6 +179,8 @@ def run_instance(
     # Handle timeout
     if result.status == "timed_out":
         docker_ops.remove_container(container_name)
+        if not instance_output_dir.exists():
+            instance_output_dir.mkdir(parents=True, exist_ok=True)
         record_result(
             instance_output_dir / "result.json",
             status="timed_out",
@@ -189,6 +197,8 @@ def run_instance(
     # Handle container error
     if result.status == "error":
         docker_ops.remove_container(container_name)
+        if not instance_output_dir.exists():
+            instance_output_dir.mkdir(parents=True, exist_ok=True)
         record_result(
             instance_output_dir / "result.json",
             status="container_error",
@@ -261,10 +271,14 @@ def run_instance(
             "elapsed_seconds": elapsed,
         }
 
-    # Fix ownership
-    import os
+    # Fix ownership recursively (container runs as root, host user needs access)
+    import os, stat
     try:
-        os.chown(str(instance_output_dir), os.getuid(), os.getgid())
+        for root, dirs, files in os.walk(str(instance_output_dir)):
+            for d in dirs:
+                os.chown(os.path.join(root, d), os.getuid(), os.getgid())
+            for f in files:
+                os.chown(os.path.join(root, f), os.getuid(), os.getgid())
     except OSError:
         pass
 
@@ -556,7 +570,7 @@ def run_eval(
 
     # Run swebench harness
     if swebench_py is None:
-        swebench_py = Path(".venv/swebench/bin/python")
+        swebench_py = Path(".venv/swebench/bin/python").absolute()
 
     import subprocess
 
@@ -568,10 +582,10 @@ def run_eval(
         "-m", "swebench.harness.run_evaluation",
         "--dataset_name", dataset_name,
         "--split", "test",
-        "--predictions_path", str(preds_file),
+        "--predictions_path", str(preds_file.absolute()),
         "--max_workers", "1",
         "--cache_level", "instance",
-        "--report_dir", str(report_dir),
+        "--report_dir", str(report_dir.absolute()),
         "--run_id", agent,
         "-i" + ",".join(instance_ids),
     ]
