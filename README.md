@@ -55,44 +55,44 @@ Install dependencies and index the 500 verified instances:
 
 ```bash
 pip install -e ".[dev]"
-swebench-orchestrator --index
+swebench-orchestrator index
 ```
 
 Build both agent bundles:
 
 ```bash
-swebench-orchestrator --build
+swebench-orchestrator build
 ```
 
 Build only one agent, or force a fresh rebuild:
 
 ```bash
-swebench-orchestrator --build codex
-swebench-orchestrator --rebuild pi
+swebench-orchestrator build codex
+swebench-orchestrator rebuild pi
 ```
 
 Run either agent on the same instance:
 
 ```bash
-swebench-orchestrator --run pi django__django-7530
-swebench-orchestrator --run codex django__django-7530
+swebench-orchestrator run pi django__django-7530
+swebench-orchestrator run codex django__django-7530
 ```
 
 Run the full dataset with an enforced per-instance timeout. `--resume` skips
 only existing results for the selected agent:
 
 ```bash
-swebench-orchestrator --run-all codex --timeout 3600 --resume
+swebench-orchestrator run-all codex --timeout 3600 --resume
 ```
 
 Install and invoke the official evaluator, then compare summaries:
 
 ```bash
-swebench-orchestrator --init
-swebench-orchestrator --eval pi
-swebench-orchestrator --eval codex
-swebench-orchestrator --summarize
-swebench-orchestrator --status
+swebench-orchestrator init
+swebench-orchestrator eval pi
+swebench-orchestrator eval codex
+swebench-orchestrator summarize
+swebench-orchestrator status
 ```
 
 Use `swebench-orchestrator --help` for the complete command and environment-variable list.
@@ -170,7 +170,7 @@ and file handlers. Logs are written to `workspace/run.log` by default.
 
 ```bash
 # Verbose output (DEBUG level)
-swebench-orchestrator -v --run pi django__django-7530
+swebench-orchestrator -v run pi django__django-7530
 
 # Check the log file
 cat workspace/run.log
