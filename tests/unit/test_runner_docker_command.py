@@ -21,7 +21,7 @@ class TestDockerCommandConstruction:
 
     def _setup_mocks(self, tmp_path: Path):
         """Create minimal agent setup and return cache file path."""
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agent_dir = agents_dir / "pi"
         bundle_dir = agent_dir / "bundle"
         agent_dir.mkdir(parents=True)

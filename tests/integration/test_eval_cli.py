@@ -28,7 +28,7 @@ class TestEvalCLI:
     def test_eval_with_swebench_not_installed(self, tmp_path: Path):
         """--eval when swebench not installed → informative error."""
         # Create a minimal workspace without swebench venv
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agents_dir.mkdir()
         (agents_dir / "test-agent").mkdir()
 

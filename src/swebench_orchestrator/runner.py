@@ -55,7 +55,7 @@ def run_instance(
 
     Args:
         agents_dir: Path to agents directory.
-        agent: Agent name (directory under agents/).
+        agent: Agent name (directory under harnesses/).
         instance_id: SWE-bench instance ID.
         output_dir: Base output directory.
         timeout: Maximum runtime in seconds.

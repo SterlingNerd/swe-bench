@@ -15,7 +15,7 @@ swe-bench/
 │   ├── docker_ops.py            # Docker lifecycle management
 │   ├── logging_config.py        # Console + file logging (Issue #11)
 │   └── ...
-├── agents/
+├── harnesses/
 │   ├── pi/                      # Pi CLI, local-provider config, entrypoint
 │   └── codex/                   # Codex CLI, local-provider config, entrypoint
 └── workspace/outputs/
@@ -23,7 +23,7 @@ swe-bench/
     └── codex/<instance_id>/     # Codex artifacts
 ```
 
-Each agent is built as a relocatable bundle under `agents/<agent>/bundle/`.
+Each agent is built as a relocatable bundle under `harnesses/<agent>/bundle/`.
 The orchestrator mounts the selected bundle read-only at `/agent` in the official
 per-instance SWE-bench image. The image's repository is already checked out at
 `/testbed`; the agent edits it and the entrypoint extracts a staged binary diff.

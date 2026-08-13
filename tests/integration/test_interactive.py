@@ -31,7 +31,7 @@ class TestInteractiveCLI:
     def test_interactive_validates_bundle_exists(self, tmp_path: Path):
         """--interactive validates bundle exists before starting."""
         runner = CliRunner()
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agents_dir.mkdir()
         (agents_dir / "test-agent").mkdir()
 
@@ -41,7 +41,7 @@ class TestInteractiveCLI:
     def test_interactive_error_message_when_bundle_missing(self, tmp_path: Path):
         """--interactive prints error when bundle missing."""
         runner = CliRunner()
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agents_dir.mkdir()
         (agents_dir / "test-agent").mkdir()
 
@@ -54,7 +54,7 @@ class TestBundleMountReadOnly:
 
     def test_bundle_mounted_read_only(self, tmp_path: Path):
         """Bundle is mounted read-only at /agent in container."""
-        bundle_dir = tmp_path / "agents" / "pi" / "bundle"
+        bundle_dir = tmp_path / "harnesses" / "pi" / "bundle"
         bundle_dir.mkdir(parents=True)
         (bundle_dir / "entrypoint.sh").write_text("#!/bin/bash\necho hello")
 
@@ -63,7 +63,7 @@ class TestBundleMountReadOnly:
 
     def test_entrypoint_called_in_interactive_mode(self, tmp_path: Path):
         """Entrypoint.sh is called with --interactive flag."""
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agents_dir.mkdir()
         agent_dir = agents_dir / "test-agent"
         agent_dir.mkdir()
@@ -81,7 +81,7 @@ class TestInteractiveValidation:
     def test_validates_agent_directory(self, tmp_path: Path):
         """Validates agent directory exists."""
         runner = CliRunner()
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agents_dir.mkdir()
 
         result = runner.invoke(main, ["--interactive", "nonexistent", "django__django-11039"])
@@ -90,7 +90,7 @@ class TestInteractiveValidation:
     def test_validates_bundle_directory(self, tmp_path: Path):
         """Validates bundle directory exists."""
         runner = CliRunner()
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agents_dir.mkdir()
         agent_dir = agents_dir / "test-agent"
         agent_dir.mkdir()
@@ -101,7 +101,7 @@ class TestInteractiveValidation:
     def test_prints_error_if_bundle_missing(self, tmp_path: Path):
         """Prints error message if bundle is missing."""
         runner = CliRunner()
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agents_dir.mkdir()
         agent_dir = agents_dir / "test-agent"
         agent_dir.mkdir()

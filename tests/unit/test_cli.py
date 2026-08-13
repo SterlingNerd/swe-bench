@@ -95,7 +95,7 @@ class TestCLI:
     def test_interactive_uses_config_registry(self, tmp_path: Path):
         """Interactive command should use config.swebench_registry for image name."""
         # Create necessary structure
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agent_dir = agents_dir / "pi"
         bundle_dir = agent_dir / "bundle"
         agent_dir.mkdir(parents=True)

@@ -136,7 +136,7 @@ class TestRunInstanceSuccess:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -161,7 +161,7 @@ class TestRunInstanceSuccess:
         output_dir = test_workspace / "outputs"
 
         run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -184,7 +184,7 @@ class TestRunInstanceTimeout:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -213,7 +213,7 @@ class TestRunInstanceError:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -235,7 +235,7 @@ class TestRunInstanceOOM:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -257,7 +257,7 @@ class TestRunInstanceCopyFailure:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -280,7 +280,7 @@ class TestRunInstanceValidation:
 
         with pytest.raises(ValueError, match="not found"):
             run_instance(
-                agents_dir=test_workspace / "agents",
+                agents_dir=test_workspace / "harnesses",
                 agent="nonexistent",
                 instance_id="django__django-11039",
                 output_dir=output_dir,
@@ -295,12 +295,12 @@ class TestRunInstanceValidation:
         output_dir = test_workspace / "outputs"
 
         # Create agent dir without bundle
-        agent_dir = test_workspace / "agents" / "nobundle"
+        agent_dir = test_workspace / "harnesses" / "nobundle"
         agent_dir.mkdir(parents=True)
 
         with pytest.raises(ValueError, match="bundle not found"):
             run_instance(
-                agents_dir=test_workspace / "agents",
+                agents_dir=test_workspace / "harnesses",
                 agent="nobundle",
                 instance_id="django__django-11039",
                 output_dir=output_dir,
@@ -316,7 +316,7 @@ class TestRunInstanceValidation:
 
         with pytest.raises(ValueError, match="not found"):
             run_instance(
-                agents_dir=test_workspace / "agents",
+                agents_dir=test_workspace / "harnesses",
                 agent="test-agent",
                 instance_id="nonexistent__instance-999",
                 output_dir=output_dir,
@@ -335,7 +335,7 @@ class TestRunInstanceElapsedTime:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -363,7 +363,7 @@ class TestRunInstanceReturnCodes:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -382,7 +382,7 @@ class TestRunInstanceReturnCodes:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -400,7 +400,7 @@ class TestRunInstanceReturnCodes:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -422,7 +422,7 @@ class TestRunInstanceImagePull:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -442,7 +442,7 @@ class TestRunInstanceImagePull:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -488,7 +488,7 @@ class TestRunInstanceNestedCopy:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -511,7 +511,7 @@ class TestRunInstanceNestedCopy:
         output_dir = test_workspace / "outputs"
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -535,7 +535,7 @@ class TestRunInstanceEdgeCases:
 
         with patch("os.chown", side_effect=OSError("Permission denied")):
             result = run_instance(
-                agents_dir=test_workspace / "agents",
+                agents_dir=test_workspace / "harnesses",
                 agent="test-agent",
                 instance_id="django__django-11039",
                 output_dir=output_dir,
@@ -556,7 +556,7 @@ class TestRunInstanceEdgeCases:
             mock_check.return_value = {"is_warning": True, "usage_pct": 92.5, "threshold_pct": 90.0}
             with patch("swebench_orchestrator.runner.logger") as mock_logger:
                 result = run_instance(
-                    agents_dir=test_workspace / "agents",
+                    agents_dir=test_workspace / "harnesses",
                     agent="test-agent",
                     instance_id="django__django-11039",
                     output_dir=output_dir,
@@ -588,7 +588,7 @@ class TestRunInstanceEdgeCases:
         docker_ops.copy_from_container = custom_copy
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,
@@ -616,7 +616,7 @@ class TestRunInstanceEdgeCases:
         docker_ops.copy_from_container = custom_copy
 
         result = run_instance(
-            agents_dir=test_workspace / "agents",
+            agents_dir=test_workspace / "harnesses",
             agent="test-agent",
             instance_id="django__django-11039",
             output_dir=output_dir,

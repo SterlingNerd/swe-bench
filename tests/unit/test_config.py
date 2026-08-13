@@ -13,7 +13,7 @@ class TestConfig:
 
     def test_defaults(self, tmp_path: Path):
         config = Config(repo_root=tmp_path)
-        assert config.agents_dir == tmp_path / "agents"
+        assert config.agents_dir == tmp_path / "harnesses"
         assert config.workspace_dir == tmp_path / "workspace"
         assert config.output_dir == tmp_path / "workspace" / "outputs"
         assert config.runs_dir == tmp_path / "runs"

@@ -7,7 +7,7 @@ inside it is a generated build artifact and must never be edited by hand.
 ## Agent folder schema
 
 ```
-agents/
+harnesses/
 └── <agent>/                 # one agent (directory name = agent id)
     ├── entrypoint.sh        # SOURCE OF TRUTH — container entrypoint (runs as /agent/entrypoint.sh)
     ├── build_bundle.sh      # builds <agent>/bundle/ from this folder
@@ -94,4 +94,4 @@ rebuild.
 
 > Note: `build_bundle.sh` resolves paths absolutely, so it works whether invoked via
 > `swebench-orchestrator --build <agent>` (absolute path) or directly
-> (`bash agents/<agent>/build_bundle.sh agents/<agent>/bundle`, relative path).
+> (`bash harnesses/<agent>/build_bundle.sh harnesses/<agent>/bundle`, relative path).

@@ -23,7 +23,7 @@ class TestRunInstance:
     def test_validates_agent_exists(self, tmp_path: Path):
         with pytest.raises(ValueError, match="not found"):
             run_instance(
-                agents_dir=tmp_path / "agents",
+                agents_dir=tmp_path / "harnesses",
                 agent="nonexistent",
                 instance_id="django__django-11039",
                 output_dir=tmp_path / "outputs",
@@ -31,7 +31,7 @@ class TestRunInstance:
             )
 
     def test_validates_bundle_exists(self, tmp_path: Path):
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agent_dir = agents_dir / "pi"
         agent_dir.mkdir(parents=True)
         # No bundle directory
@@ -46,7 +46,7 @@ class TestRunInstance:
             )
 
     def test_validates_instance_exists(self, tmp_path: Path):
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agent_dir = agents_dir / "pi"
         bundle_dir = agent_dir / "bundle"
         agent_dir.mkdir(parents=True)
@@ -67,7 +67,7 @@ class TestRunInstance:
 
     def test_negative_timeout_raises(self, tmp_path: Path):
         """Negative timeout should raise ValueError before any Docker work."""
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agent_dir = agents_dir / "pi"
         bundle_dir = agent_dir / "bundle"
         agent_dir.mkdir(parents=True)
@@ -95,7 +95,7 @@ class TestRunInstance:
 
     def test_zero_timeout_accepted(self, tmp_path: Path):
         """Timeout of 0 should be accepted (no timeout)."""
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agent_dir = agents_dir / "pi"
         bundle_dir = agent_dir / "bundle"
         agent_dir.mkdir(parents=True)
@@ -134,7 +134,7 @@ class TestRunInstance:
 
     def test_large_timeout_accepted(self, tmp_path: Path):
         """Very large timeout should be accepted."""
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agent_dir = agents_dir / "pi"
         bundle_dir = agent_dir / "bundle"
         agent_dir.mkdir(parents=True)
@@ -264,7 +264,7 @@ class TestRunnerUsesConfig:
         runner = Runner(config)
 
         # Create necessary directories and files
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agent_dir = agents_dir / "pi"
         bundle_dir = agent_dir / "bundle"
         agent_dir.mkdir(parents=True)
@@ -297,7 +297,7 @@ class TestRunnerUsesConfig:
         runner = Runner(config)
 
         # Create necessary directories and files
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agent_dir = agents_dir / "pi"
         bundle_dir = agent_dir / "bundle"
         agent_dir.mkdir(parents=True)
