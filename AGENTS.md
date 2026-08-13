@@ -11,7 +11,7 @@ The goal is to compare agent performance on real-world GitHub issues in a reprod
 | Directory | Purpose |
 |-----------|---------|
 | `src/swebench_orchestrator/` | Python CLI & orchestrator logic (Click-based interface, Docker lifecycle) |
-| `agents/` | Agent definitions — each subdirectory is one agent (`pi/`, `codex/`) |
+| `harnesses/` | Agent harness definitions — each subdirectory is one agent (`pi/`, `codex/`) |
 | `workspace/outputs/` | Per-agent, per-instance output artifacts (patches, results, logs) |
 | `scripts/` | Utility scripts |
 
@@ -49,10 +49,10 @@ We use a **GitHub issues → worktrees → pull requests** workflow for all deve
 
 ## Agent Architecture
 
-Each agent is defined as a folder under `agents/<agent>/` with this structure:
+Each agent is defined as a folder under `harnesses/<agent>/` with this structure:
 
 ```
-agents/
+harnesses/
 └── <agent>/                 # one agent (directory name = agent id)
     ├── entrypoint.sh        # SOURCE OF TRUTH — container entrypoint
     ├── build_bundle.sh      # builds <agent>/bundle/ from this folder
@@ -74,4 +74,4 @@ swebench-orchestrator --build <agent>      # regenerates <agent>/bundle/ from th
 
 Editing files inside `bundle/` directly is forbidden — it is gitignored and overwritten on every build. Always change the source folder and rebuild.
 
-See [`agents/agents.md`](./agents/agents.md) for the full agent folder schema and harness integration details.
+See [`harnesses/AGENTS.md`](./harnesses/AGENTS.md) for the full agent folder schema and harness integration details.

@@ -30,7 +30,7 @@ class Config:
     swebench_registry: str = "swebench"
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "agents_dir", self.repo_root / "agents")
+        object.__setattr__(self, "agents_dir", self.repo_root / "harnesses")
         workspace = Path(os.environ.get("SWE_WORKSPACE_DIR", str(self.repo_root / "workspace")))
         object.__setattr__(self, "workspace_dir", workspace)
         object.__setattr__(self, "output_dir", self.workspace_dir / "outputs")

@@ -13,7 +13,7 @@ def test_workspace(tmp_path: Path) -> Path:
     """Create a clean test workspace with agents and outputs directories."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "agents").mkdir()
+    (workspace / "harnesses").mkdir()
     (workspace / "outputs").mkdir()
     (workspace / "runs").mkdir()
     return workspace
@@ -25,7 +25,7 @@ def mock_agent(test_workspace: Path) -> Path:
 
     Returns path to the agent directory.
     """
-    agent_dir = test_workspace / "agents" / "test-agent"
+    agent_dir = test_workspace / "harnesses" / "test-agent"
     bundle_dir = agent_dir / "bundle"
     bundle_dir.mkdir(parents=True)
 

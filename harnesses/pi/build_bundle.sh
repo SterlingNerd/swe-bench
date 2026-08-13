@@ -9,7 +9,7 @@
 #   - entrypoint.sh shim
 #
 # Usage: ./build_bundle.sh [output_dir]
-#   output_dir defaults to agents/pi/bundle/
+#   output_dir defaults to harnesses/pi/bundle/
 # ==============================================================================
 set -euo pipefail
 

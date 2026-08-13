@@ -16,7 +16,7 @@ class TestAgentBundle:
     """Tests for the AgentBundle class."""
 
     def test_bundle_exists(self, tmp_path: Path):
-        agent_dir = tmp_path / "agents" / "pi"
+        agent_dir = tmp_path / "harnesses" / "pi"
         bundle_dir = agent_dir / "bundle"
         bundle_dir.mkdir(parents=True)
         (bundle_dir / "entrypoint.sh").write_text("#!/bin/bash\necho hello")
@@ -25,14 +25,14 @@ class TestAgentBundle:
         assert bundle.exists is True
 
     def test_bundle_missing(self, tmp_path: Path):
-        agent_dir = tmp_path / "agents" / "pi"
+        agent_dir = tmp_path / "harnesses" / "pi"
         agent_dir.mkdir(parents=True)
 
         bundle = AgentBundle(agent_dir)
         assert bundle.exists is False
 
     def test_build_script_exists(self, tmp_path: Path):
-        agent_dir = tmp_path / "agents" / "pi"
+        agent_dir = tmp_path / "harnesses" / "pi"
         agent_dir.mkdir(parents=True)
         (agent_dir / "build_bundle.sh").write_text("#!/bin/bash\necho building")
 
@@ -40,21 +40,21 @@ class TestAgentBundle:
         assert bundle.has_build_script is True
 
     def test_build_script_missing(self, tmp_path: Path):
-        agent_dir = tmp_path / "agents" / "pi"
+        agent_dir = tmp_path / "harnesses" / "pi"
         agent_dir.mkdir(parents=True)
 
         bundle = AgentBundle(agent_dir)
         assert bundle.has_build_script is False
 
     def test_name(self, tmp_path: Path):
-        agent_dir = tmp_path / "agents" / "codex"
+        agent_dir = tmp_path / "harnesses" / "codex"
         agent_dir.mkdir(parents=True)
 
         bundle = AgentBundle(agent_dir)
         assert bundle.name == "codex"
 
     def test_size(self, tmp_path: Path):
-        agent_dir = tmp_path / "agents" / "pi"
+        agent_dir = tmp_path / "harnesses" / "pi"
         bundle_dir = agent_dir / "bundle"
         bundle_dir.mkdir(parents=True)
         # Create some files
@@ -70,7 +70,7 @@ class TestDiscoverAgents:
     """Tests for discover_agents function."""
 
     def test_discovers_all_agents(self, tmp_path: Path):
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         (agents_dir / "pi").mkdir(parents=True)
         (agents_dir / "codex").mkdir(parents=True)
         (agents_dir / "base").mkdir(parents=True)  # Should be excluded
@@ -82,14 +82,14 @@ class TestDiscoverAgents:
         assert "base" not in names
 
     def test_discovers_no_agents(self, tmp_path: Path):
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agents_dir.mkdir()
 
         agents = list(discover_agents(agents_dir))
         assert len(agents) == 0
 
     def test_excludes_base(self, tmp_path: Path):
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         (agents_dir / "base").mkdir(parents=True)
         (agents_dir / "pi").mkdir(parents=True)
 
@@ -102,7 +102,7 @@ class TestBundleBuilder:
     """Tests for the BundleBuilder class."""
 
     def test_build_single_agent(self, tmp_path: Path):
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agent_dir = agents_dir / "pi"
         agent_dir.mkdir(parents=True)
 
@@ -126,12 +126,12 @@ echo "Built bundle at $BUNDLE_DIR"
         assert bundle.exists is True
 
     def test_build_nonexistent_agent(self, tmp_path: Path):
-        builder = BundleBuilder(tmp_path / "agents")
+        builder = BundleBuilder(tmp_path / "harnesses")
         with pytest.raises(ValueError, match="not found"):
             builder.build_agent("nonexistent")
 
     def test_build_agent_without_script(self, tmp_path: Path):
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agent_dir = agents_dir / "pi"
         agent_dir.mkdir(parents=True)
 
@@ -140,7 +140,7 @@ echo "Built bundle at $BUNDLE_DIR"
         assert result is False  # No build script, returns False
 
     def test_build_all_agents(self, tmp_path: Path):
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         for name in ["pi", "codex"]:
             agent_dir = agents_dir / name
             agent_dir.mkdir(parents=True)
@@ -159,7 +159,7 @@ echo "Built {name} bundle at $BUNDLE_DIR"
         assert all(r is True for r in results)
 
     def test_build_skips_base(self, tmp_path: Path):
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         (agents_dir / "base").mkdir(parents=True)
         (agents_dir / "pi").mkdir(parents=True)
         build_script = agents_dir / "pi" / "build_bundle.sh"
@@ -171,7 +171,7 @@ echo "Built {name} bundle at $BUNDLE_DIR"
         assert len(results) == 1  # Only pi, not base
 
     def test_rebuild_forces_rebuild(self, tmp_path: Path):
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         agent_dir = agents_dir / "pi"
         agent_dir.mkdir(parents=True)
 
@@ -202,7 +202,7 @@ echo "Rebuilt at $BUNDLE_DIR" > "$BUNDLE_DIR/built.txt"
         assert result2 is True
 
     def test_list_available_agents(self, tmp_path: Path):
-        agents_dir = tmp_path / "agents"
+        agents_dir = tmp_path / "harnesses"
         (agents_dir / "pi").mkdir(parents=True)
         (agents_dir / "codex").mkdir(parents=True)
         (agents_dir / "base").mkdir()

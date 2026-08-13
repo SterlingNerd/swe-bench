@@ -10,7 +10,7 @@ class TestBundleBuilderIntegration:
 
     def test_build_agent_creates_bundle(self, test_workspace):
         """Building an agent creates the bundle directory with expected files."""
-        agents_dir = test_workspace / "agents"
+        agents_dir = test_workspace / "harnesses"
         agent_dir = agents_dir / "test-agent"
         agent_dir.mkdir(parents=True)
 
@@ -38,7 +38,7 @@ echo "bundle content" > "$BUNDLE_DIR/lib/bundle.js"
 
     def test_build_agent_with_real_node(self, test_workspace):
         """Build script that creates a proper node binary."""
-        agents_dir = test_workspace / "agents"
+        agents_dir = test_workspace / "harnesses"
         agent_dir = agents_dir / "pi"
         agent_dir.mkdir(parents=True)
 
@@ -77,7 +77,7 @@ chmod +x "$BUNDLE_DIR/entrypoint.sh"
 
     def test_build_all_agents(self, test_workspace):
         """Building all agents builds each one."""
-        agents_dir = test_workspace / "agents"
+        agents_dir = test_workspace / "harnesses"
 
         for name in ["pi", "codex"]:
             agent_dir = agents_dir / name
@@ -103,7 +103,7 @@ echo "Built {name} bundle" > "$BUNDLE_DIR/built.txt"
 
     def test_rebuild_removes_existing_bundle(self, test_workspace):
         """Rebuild removes existing bundle before rebuilding."""
-        agents_dir = test_workspace / "agents"
+        agents_dir = test_workspace / "harnesses"
         agent_dir = agents_dir / "test-agent"
         agent_dir.mkdir(parents=True)
 
@@ -137,7 +137,7 @@ echo "second build" > "$BUNDLE_DIR/version.txt"
 
     def test_list_bundles(self, test_workspace):
         """List bundles returns only built agents with sizes."""
-        agents_dir = test_workspace / "agents"
+        agents_dir = test_workspace / "harnesses"
 
         # Build one agent
         pi_dir = agents_dir / "pi"
@@ -156,7 +156,7 @@ echo "second build" > "$BUNDLE_DIR/version.txt"
 
     def test_build_nonexistent_agent_raises(self, test_workspace):
         """Building non-existent agent raises ValueError."""
-        builder = BundleBuilder(test_workspace / "agents")
+        builder = BundleBuilder(test_workspace / "harnesses")
         try:
             builder.build_agent("nonexistent")
             assert False, "Should have raised ValueError"
@@ -165,7 +165,7 @@ echo "second build" > "$BUNDLE_DIR/version.txt"
 
     def test_build_skips_agents_without_script(self, test_workspace):
         """Agents without build_bundle.sh are skipped."""
-        agents_dir = test_workspace / "agents"
+        agents_dir = test_workspace / "harnesses"
         agent_dir = agents_dir / "noscript"
         agent_dir.mkdir(parents=True)
 
@@ -180,7 +180,7 @@ class TestDiscoverAgentsIntegration:
 
     def test_discovers_all_non_base_agents(self, test_workspace):
         """Discovers all agent directories except 'base'."""
-        agents_dir = test_workspace / "agents"
+        agents_dir = test_workspace / "harnesses"
         (agents_dir / "pi").mkdir()
         (agents_dir / "codex").mkdir()
         (agents_dir / "base").mkdir()
@@ -196,7 +196,7 @@ class TestDiscoverAgentsIntegration:
 
     def test_returns_sorted(self, test_workspace):
         """Agents are returned in sorted order."""
-        agents_dir = test_workspace / "agents"
+        agents_dir = test_workspace / "harnesses"
         for name in ["zebra", "alpha", "middle"]:
             (agents_dir / name).mkdir()
 
@@ -207,11 +207,11 @@ class TestDiscoverAgentsIntegration:
 
     def test_empty_when_no_agents(self, test_workspace):
         """Returns empty when no agent directories exist."""
-        agents = list(discover_agents(test_workspace / "agents"))
+        agents = list(discover_agents(test_workspace / "harnesses"))
         assert len(agents) == 0
 
     def test_empty_when_base_only(self, test_workspace):
         """Returns empty when only 'base' directory exists."""
-        (test_workspace / "agents" / "base").mkdir(parents=True)
-        agents = list(discover_agents(test_workspace / "agents"))
+        (test_workspace / "harnesses" / "base").mkdir(parents=True)
+        agents = list(discover_agents(test_workspace / "harnesses"))
         assert len(agents) == 0

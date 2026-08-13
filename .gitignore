@@ -5,7 +5,7 @@ workspace/
 runs/
 
 # Agent bundles (self-contained, built at runtime)
-agents/*/bundle/
+harnesses/*/bundle/
 
 # Python venvs
 .venv/

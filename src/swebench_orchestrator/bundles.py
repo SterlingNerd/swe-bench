@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class AgentBundle:
     """Represents an agent's bundle directory.
 
-    An agent is a directory under agents/<name>/ containing:
+    An agent is a directory under harnesses/<name>/ containing:
     - build_bundle.sh  — script to create the bundle
     - bundle/          — the built bundle (created by build_bundle.sh)
     """
@@ -87,7 +87,7 @@ class BundleBuilder:
         """Build a single agent bundle.
 
         Args:
-            agent_name: Name of the agent (directory under agents/).
+            agent_name: Name of the agent (directory under harnesses/).
 
         Returns:
             True if build succeeded, False if skipped or failed.
