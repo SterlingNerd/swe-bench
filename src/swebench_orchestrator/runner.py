@@ -21,6 +21,7 @@ from swebench_orchestrator.docker_ops import ContainerResult, DockerOps
 from swebench_orchestrator.manifest import RunManager
 from swebench_orchestrator.models import (
     Instance,
+    RunManifest,
     Summary,
     compute_storage_info,
     instance_to_image_name,
@@ -506,6 +507,39 @@ def fold_harness_results(
     return folded
 
 
+def find_harness_report_for_instance(
+    output_dir: Path,
+    instance_id: str,
+    run_id: str,
+) -> Optional[dict[str, Any]]:
+    """Find the swebench harness report for a single-instance eval.
+
+    When the harness is invoked with --run_id, it creates a report named
+    {run_id}.{run_id}.json in the eval directory.
+
+    Args:
+        output_dir: Agent's output directory.
+        instance_id: The SWE-bench instance ID (for logging).
+        run_id: The --run_id passed to the harness.
+
+    Returns:
+        Report dict if found, None otherwise.
+    """
+    eval_dir = output_dir / "eval"
+    if not eval_dir.is_dir():
+        return None
+
+    report_file = eval_dir / f"{run_id}.{run_id}.json"
+    if report_file.exists():
+        try:
+            data = read_json(report_file)
+            if "resolved_ids" in data and "unresolved_ids" in data:
+                return data
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("Failed to read harness report: %s", report_file)
+    return None
+
+
 def find_harness_report(output_dir: Path) -> Optional[dict[str, Any]]:
     """Find the swebench harness report JSON file.
 
@@ -684,6 +718,23 @@ class Runner:
 
         return result
 
+    def _ensure_run(self, agent: str, timeout: int) -> tuple[str, RunManifest]:
+        """Ensure a run manifest exists for the agent.
+
+        Creates a new run if none exists. Returns (run_id, manifest).
+
+        Args:
+            agent: Agent name.
+            timeout: Default timeout per instance.
+
+        Returns:
+            Tuple of (run_id, RunManifest).
+        """
+        manifest = self.run_manager.resolve_run(agent)
+        if manifest is None:
+            manifest = self.run_manager.create_run(agent=agent, timeout=timeout)
+        return manifest.run_id, manifest
+
     def run_all(
         self,
         agent: str,
@@ -694,6 +745,11 @@ class Runner:
 
         Before starting, waits for any previously running containers to finish
         (safety net for interrupted runs).
+
+        For each instance, interleaves:
+        1. Work phase — run agent, produce patch
+        2. Eval phase — run harness for that single instance
+        3. Cleanup — remove the instance's Docker image
 
         Args:
             agent: Agent name.
@@ -706,6 +762,9 @@ class Runner:
         # Safety net: wait for any stale containers from interrupted runs
         logger.info("Waiting for any running %s containers to finish...", agent)
         self.docker_ops.wait_for_agent_containers(agent, timeout_seconds=timeout)
+
+        # Ensure a run manifest exists
+        run_id, _ = self._ensure_run(agent, timeout)
 
         # Get all instances from cache
         dataset_cache = DatasetCache(self.config.cache_file)
@@ -724,9 +783,60 @@ class Runner:
 
             count += 1
             try:
+                # Create attempt for manifest tracking
+                attempt = self.run_manager.create_attempt(run_id, iid)
+
+                # Phase 1: Work — run agent, produce patch
                 result = self.run_instance(agent, iid, timeout)
-                if result.get("status") in ("timed_out", "container_error", "copy_failed"):
+                work_status = result.get("status", "unknown")
+
+                if work_status in ("timed_out", "container_error", "copy_failed"):
                     failed += 1
+                    # Update manifest with work result; skip eval on failure
+                    self.run_manager.update_attempt_result(
+                        run_id,
+                        attempt.attempt_id,
+                        status=work_status,
+                        elapsed_seconds=result.get("elapsed_seconds", 0),
+                    )
+                    continue
+
+                # Update manifest with work result
+                self.run_manager.update_attempt_result(
+                    run_id,
+                    attempt.attempt_id,
+                    status=work_status,
+                    elapsed_seconds=result.get("elapsed_seconds", 0),
+                )
+
+                # Phase 2: Eval — run harness for this single instance
+                eval_result = self.run_eval_instance(
+                    agent=agent,
+                    instance_id=iid,
+                    output_dir=self.config.output_dir / agent,
+                    dataset_name=self.config.hf_dataset,
+                    swebench_py=self.config.swebench_py if self.config.swebench_py.exists() else None,
+                )
+
+                local_eval = eval_result.get("local_eval")
+
+                # Update manifest with eval result
+                self.run_manager.update_attempt_result(
+                    run_id,
+                    attempt.attempt_id,
+                    status=work_status,
+                    elapsed_seconds=result.get("elapsed_seconds", 0),
+                    local_eval=local_eval,
+                )
+
+                # Count as failed only when eval explicitly reports failure/error
+                if local_eval in ("failed", "error"):
+                    failed += 1
+
+                # Phase 3: Cleanup — remove the instance's Docker image
+                image_name = instance_to_image_name(iid, registry=self.config.swebench_registry)
+                self.docker_ops.remove_image(image_name)
+
             except Exception as e:
                 logger.error("Failed to run %s: %s", iid, e)
                 failed += 1
@@ -748,6 +858,114 @@ class Runner:
         """
         output_dir = self.config.output_dir / agent
         return summarize_results(output_dir, agent=agent)
+
+    def run_eval_instance(
+        self,
+        agent: str,
+        instance_id: str,
+        output_dir: Optional[Path] = None,
+        dataset_name: str = "princeton-nlp/SWE-bench_Verified",
+        swebench_py: Optional[Path] = None,
+    ) -> dict[str, Any]:
+        """Run swebench harness evaluation for a single instance.
+
+        Creates a temp predictions.jsonl with one entry, runs the harness,
+        folds the result, and cleans up the temp file.
+
+        Args:
+            agent: Agent name.
+            instance_id: SWE-bench instance ID to evaluate.
+            output_dir: Instance output directory (defaults to config).
+            dataset_name: HuggingFace dataset name.
+            swebench_py: Path to swebench Python (uses config if None).
+
+        Returns:
+            Dict with status and local_eval result.
+            On success: {"status": "completed", "local_eval": "resolved"/"failed"/"error"}
+            On failure: {"status": "harness_error"/"no_patch"/"no_report", "local_eval": None}
+        """
+        if output_dir is None:
+            output_dir = self.config.output_dir / agent
+
+        # Read patch from instance output directory
+        patch_file = output_dir / instance_id / "patch.diff"
+        if not patch_file.exists() or patch_file.stat().st_size == 0:
+            logger.warning("No patch found for %s, skipping eval", instance_id)
+            return {"status": "no_patch", "local_eval": None}
+
+        # Create unique run_id to avoid report collisions
+        run_id = f"{agent}_{instance_id}"
+
+        # Write single-entry predictions.jsonl to a temp file
+        preds_file = output_dir / f".tmp_predictions_{instance_id}.jsonl"
+        try:
+            patch_content = patch_file.read_text()
+            with open(preds_file, "w") as f:
+                f.write(json.dumps({
+                    "instance_id": instance_id,
+                    "model_name_or_path": agent,
+                    "model_patch": patch_content,
+                }) + "\n")
+
+            # Run swebench harness for this single instance
+            if swebench_py is None:
+                swebench_py = Path(".venv/swebench/bin/python").absolute()
+
+            import subprocess
+
+            report_dir = output_dir / "eval"
+            report_dir.mkdir(exist_ok=True)
+
+            cmd = [
+                str(swebench_py),
+                "-m", "swebench.harness.run_evaluation",
+                "--dataset_name", dataset_name,
+                "--split", "test",
+                "--predictions_path", str(preds_file.absolute()),
+                "--max_workers", "1",
+                "--cache_level", "instance",
+                "--report_dir", str(report_dir.absolute()),
+                "--run_id", run_id,
+                "-i", instance_id,
+            ]
+
+            logger.info("[EVAL] Running harness for %s (run_id=%s)", instance_id, run_id)
+            result = subprocess.run(cmd, cwd=str(output_dir))
+
+            if result.returncode != 0:
+                logger.error(
+                    "swebench harness failed for %s with exit code %d",
+                    instance_id, result.returncode,
+                )
+                return {"status": "harness_error", "local_eval": None}
+
+            # Find and fold harness results
+            report_data = find_harness_report_for_instance(output_dir, instance_id, run_id)
+            if report_data:
+                resolved = set(report_data.get("resolved_ids", []))
+                errored = set(report_data.get("error_ids", []))
+                unresolved = set(report_data.get("unresolved_ids", []))
+
+                if instance_id in resolved:
+                    local_eval = "resolved"
+                elif instance_id in errored:
+                    local_eval = "error"
+                else:
+                    local_eval = "failed"
+
+                logger.info("Eval for %s: %s", instance_id, local_eval)
+                return {"status": "completed", "local_eval": local_eval}
+            else:
+                logger.warning("No harness report found for %s", instance_id)
+                return {"status": "no_report", "local_eval": None}
+
+        finally:
+            # Always clean up temp predictions file
+            if preds_file.exists():
+                try:
+                    preds_file.unlink()
+                except OSError:
+                    pass
 
     def eval(self, agent: str) -> dict[str, Any]:
         """Run swebench harness evaluation for an agent.

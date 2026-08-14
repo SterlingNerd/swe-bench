@@ -120,6 +120,32 @@ class DockerOps:
             logger.error("Timeout pulling image: %s", image_name)
             return False
 
+    def remove_image(self, image_name: str) -> bool:
+        """Remove a Docker image (force if needed).
+
+        Resilient: returns True if image was removed OR didn't exist.
+        Returns False only on unexpected errors (timeout, etc.).
+
+        Uses `docker image rm -f` for idempotent removal. The `-f` flag handles
+        cases where the swebench harness created child images (e.g., via commit).
+
+        Args:
+            image_name: Full image name to remove.
+
+        Returns:
+            True if image was removed or didn't exist. False on unexpected errors.
+        """
+        try:
+            result = subprocess.run(
+                ["docker", "image", "rm", "-f", image_name],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            return result.returncode == 0 or "No such image" in result.stderr
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+
     def run_container(
         self,
         image_name: str,

@@ -814,6 +814,93 @@ class TestRunnerMethods:
             assert call_kwargs["dataset_name"] == "custom/dataset"
             assert call_kwargs["swebench_py"] == swebench_py
 
+    def test_run_all_interleaves_eval_and_image_removal(self, tmp_path: Path):
+        """run_all should run eval + remove image after each instance's work phase."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "cache.json",
+        )
+        runner = Runner(config)
+
+        # Create cache with 1 instance
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        # Create output dir with patch (so eval doesn't return no_patch)
+        output_dir = config.output_dir / "pi"
+        instance_dir = output_dir / "django__django-11039"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "patch.diff").write_text("diff --git a/test b/test\n+fix")
+
+        # Create eval report so eval returns resolved
+        eval_dir = output_dir / "eval"
+        eval_dir.mkdir()
+        (eval_dir / "pi_django__django-11039.pi_django__django-11039.json").write_text(
+            json.dumps({"resolved_ids": ["django__django-11039"], "unresolved_ids": [], "error_ids": []})
+        )
+
+        with patch.object(runner, "run_instance") as mock_run_instance, \
+             patch.object(runner, "run_eval_instance") as mock_run_eval, \
+             patch.object(runner.docker_ops, "remove_image") as mock_remove:
+            mock_run_instance.return_value = {"status": "patch_collected", "elapsed_seconds": 42}
+            mock_run_eval.return_value = {"status": "completed", "local_eval": "resolved"}
+            mock_remove.return_value = True
+
+            result = runner.run_all("pi", timeout=3600)
+
+            # Should have run once, skipped 0, failed 0
+            assert result["run"] == 1
+            assert result["skipped"] == 0
+            assert result["failed"] == 0
+
+            # Verify interleaved order: work → eval → remove_image
+            mock_run_instance.assert_called_once()
+            mock_run_eval.assert_called_once()
+            mock_remove.assert_called_once()
+
+            # Verify remove_image was called with the correct image name
+            image_name = mock_remove.call_args.args[0]
+            assert "django" in image_name
+            assert "11039" in image_name
+
+    def test_run_all_skips_eval_on_work_failure(self, tmp_path: Path):
+        """run_all should skip eval when work phase fails."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "cache.json",
+        )
+        runner = Runner(config)
+
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        with patch.object(runner, "run_instance") as mock_run_instance, \
+             patch.object(runner, "run_eval_instance") as mock_run_eval, \
+             patch.object(runner.docker_ops, "remove_image") as mock_remove:
+            # Work phase fails
+            mock_run_instance.return_value = {"status": "timed_out", "elapsed_seconds": 3600}
+
+            result = runner.run_all("pi", timeout=3600)
+
+            assert result["run"] == 1
+            assert result["failed"] == 1
+
+            # Eval and image removal should NOT be called when work fails
+            mock_run_eval.assert_not_called()
+            mock_remove.assert_not_called()
+
 
 class TestGeneratePredictions:
     """Tests for generate_predictions function."""
