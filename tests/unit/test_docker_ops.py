@@ -160,6 +160,50 @@ class TestWaitForAgentContainers:
             result = ops.wait_for_agent_containers("pi", timeout_seconds=5)
             assert result is True
 
+class TestRemoveImage:
+    """Tests for DockerOps.remove_image method."""
+
+    def test_remove_image_success(self):
+        """Returns True when image exists and is removed."""
+        ops = DockerOps()
+        with patch("swebench_orchestrator.docker_ops.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = ops.remove_image("swebench/sweb.eval.x86_64.django_1776_django-11039:latest")
+            assert result is True
+            mock_run.assert_called_once_with(
+                ["docker", "image", "rm", "-f",
+                 "swebench/sweb.eval.x86_64.django_1776_django-11039:latest"],
+                capture_output=True, text=True, timeout=30,
+            )
+
+    def test_remove_image_already_gone(self):
+        """Returns True when image doesn't exist (idempotent)."""
+        ops = DockerOps()
+        with patch("swebench_orchestrator.docker_ops.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=1,
+                stderr="Error: No such image: swebench/test:latest",
+            )
+            result = ops.remove_image("swebench/test:latest")
+            assert result is True
+
+    def test_remove_image_timeout(self):
+        """Returns False on subprocess timeout."""
+        ops = DockerOps()
+        with patch("swebench_orchestrator.docker_ops.subprocess.run") as mock_run:
+            from subprocess import TimeoutExpired
+            mock_run.side_effect = TimeoutExpired(cmd="docker image rm -f", timeout=30)
+            result = ops.remove_image("swebench/test:latest")
+            assert result is False
+
+    def test_remove_image_file_not_found(self):
+        """Returns False when docker binary is missing."""
+        ops = DockerOps()
+        with patch("swebench_orchestrator.docker_ops.subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError("docker not found")
+            result = ops.remove_image("swebench/test:latest")
+            assert result is False
+
     def test_times_out_and_force_kills(self):
         """Should force-kill containers after timeout."""
         ops = DockerOps()
