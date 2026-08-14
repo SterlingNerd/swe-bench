@@ -54,7 +54,7 @@ class TestFindHarnessReportForInstance:
     """Tests for find_harness_report_for_instance helper."""
 
     def test_finds_report_with_run_id(self, tmp_path: Path):
-        """Returns report data when the run_id-based file exists."""
+        """Returns report data when the run_id-based file exists (fallback pattern)."""
         eval_dir = tmp_path / "eval"
         eval_dir.mkdir()
         report_data = {
@@ -63,6 +63,23 @@ class TestFindHarnessReportForInstance:
             "error_ids": [],
         }
         (eval_dir / "pi_django__django-11039.pi_django__django-11039.json").write_text(
+            json.dumps(report_data)
+        )
+
+        result = find_harness_report_for_instance(tmp_path, "django__django-11039", "pi_django__django-11039")
+        assert result == report_data
+
+    def test_finds_report_with_agent_runid_pattern(self, tmp_path: Path):
+        """Returns report data when the actual harness pattern {agent}.{run_id}.json exists."""
+        eval_dir = tmp_path / "eval"
+        eval_dir.mkdir()
+        report_data = {
+            "resolved_ids": ["django__django-11039"],
+            "unresolved_ids": [],
+            "error_ids": [],
+        }
+        # This is the actual pattern the harness writes: {agent}.{run_id}.json
+        (eval_dir / "pi.pi_django__django-11039.json").write_text(
             json.dumps(report_data)
         )
 

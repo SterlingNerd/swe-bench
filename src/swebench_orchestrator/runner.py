@@ -515,7 +515,8 @@ def find_harness_report_for_instance(
     """Find the swebench harness report for a single-instance eval.
 
     When the harness is invoked with --run_id, it creates a report named
-    {run_id}.{run_id}.json in the eval directory.
+    {agent}.{run_id}.json. The harness writes to the current working directory
+    (output_dir) rather than the --report_dir, so we check both locations.
 
     Args:
         output_dir: Agent's output directory.
@@ -526,24 +527,39 @@ def find_harness_report_for_instance(
         Report dict if found, None otherwise.
     """
     eval_dir = output_dir / "eval"
-    if not eval_dir.is_dir():
-        return None
+    agent = output_dir.name
+    # Try the actual harness naming pattern: {agent}.{run_id}.json
+    # Check both output_dir (where harness actually writes) and eval_dir (--report_dir)
+    candidates = [
+        output_dir / f"{agent}.{run_id}.json",  # Actual harness location
+        eval_dir / f"{agent}.{run_id}.json",    # Expected --report_dir location
+        # Fallback to old expected pattern
+        output_dir / f"{run_id}.{run_id}.json",
+        eval_dir / f"{run_id}.{run_id}.json",
+    ]
+    # Also check newest JSON files in both dirs
+    candidates.extend(sorted(output_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True))
+    if eval_dir.is_dir():
+        candidates.extend(sorted(eval_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True))
 
-    report_file = eval_dir / f"{run_id}.{run_id}.json"
-    if report_file.exists():
-        try:
-            data = read_json(report_file)
-            if "resolved_ids" in data and "unresolved_ids" in data:
-                return data
-        except (json.JSONDecodeError, ValueError):
-            logger.warning("Failed to read harness report: %s", report_file)
+    for report_file in candidates:
+        if report_file.exists():
+            try:
+                data = read_json(report_file)
+                if "resolved_ids" in data and "unresolved_ids" in data:
+                    return data
+            except (json.JSONDecodeError, ValueError):
+                logger.warning("Failed to read harness report: %s", report_file)
     return None
 
 
 def find_harness_report(output_dir: Path) -> Optional[dict[str, Any]]:
     """Find the swebench harness report JSON file.
 
-    Searches for reports in the eval directory with various naming patterns.
+    Searches for reports in both the output directory (where harness actually writes)
+    and the eval directory (--report_dir) with various naming patterns.
+    Also combines individual per-instance reports (from run_eval_instance) if no
+    combined batch report is found.
 
     Args:
         output_dir: Agent's output directory.
@@ -552,18 +568,28 @@ def find_harness_report(output_dir: Path) -> Optional[dict[str, Any]]:
         Report dict if found, None otherwise.
     """
     eval_dir = output_dir / "eval"
-    if not eval_dir.is_dir():
-        return None
+    agent = output_dir.name
 
-    # Try common report naming patterns
+    # Try common report naming patterns in both locations (combined batch reports)
     candidates = [
-        eval_dir / f"{output_dir.name}.{output_dir.name}.json",
-        eval_dir / f"{output_dir.name}__{output_dir.name}.json",
+        output_dir / f"{agent}.{agent}.json",        # Actual harness location
+        eval_dir / f"{agent}.{agent}.json",          # Expected --report_dir location
+        output_dir / f"{agent}__{agent}.json",
+        eval_dir / f"{agent}__{agent}.json",
     ]
 
-    # Also try newest JSON file in eval dir
-    json_files = sorted(eval_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    candidates.extend(json_files)
+    # Also try newest JSON files in both dirs, but exclude individual per-instance reports
+    # (pattern: {agent}.{instance_id}.json where instance_id != agent)
+    def is_batch_report(f: Path) -> bool:
+        return f.name in (f"{agent}.{agent}.json", f"{agent}__{agent}.json")
+    
+    for f in sorted(output_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if is_batch_report(f):
+            candidates.append(f)
+    if eval_dir.is_dir():
+        for f in sorted(eval_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            if is_batch_report(f):
+                candidates.append(f)
 
     for report_file in candidates:
         if report_file.exists():
@@ -573,6 +599,30 @@ def find_harness_report(output_dir: Path) -> Optional[dict[str, Any]]:
                     return data
             except (json.JSONDecodeError, ValueError):
                 continue
+
+    # Fallback: combine individual per-instance reports (pattern: {agent}.{instance_id}.json)
+    # These are created by run_eval_instance for each instance
+    individual_reports = list(output_dir.glob(f"{agent}.*.json"))
+    if not individual_reports and eval_dir.is_dir():
+        individual_reports = list(eval_dir.glob(f"{agent}.*.json"))
+    
+    if individual_reports:
+        combined = {"resolved_ids": [], "unresolved_ids": [], "error_ids": []}
+        for report_file in individual_reports:
+            # Skip the combined batch report files
+            if report_file.name in (f"{agent}.{agent}.json", f"{agent}__{agent}.json"):
+                continue
+            try:
+                data = read_json(report_file)
+                if "resolved_ids" in data and "unresolved_ids" in data:
+                    combined["resolved_ids"].extend(data.get("resolved_ids", []))
+                    combined["unresolved_ids"].extend(data.get("unresolved_ids", []))
+                    combined["error_ids"].extend(data.get("error_ids", []))
+            except (json.JSONDecodeError, ValueError):
+                continue
+        
+        if combined["resolved_ids"] or combined["unresolved_ids"] or combined["error_ids"]:
+            return combined
 
     return None
 
