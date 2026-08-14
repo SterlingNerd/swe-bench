@@ -506,6 +506,39 @@ def fold_harness_results(
     return folded
 
 
+def find_harness_report_for_instance(
+    output_dir: Path,
+    instance_id: str,
+    run_id: str,
+) -> Optional[dict[str, Any]]:
+    """Find the swebench harness report for a single-instance eval.
+
+    When the harness is invoked with --run_id, it creates a report named
+    {run_id}.{run_id}.json in the eval directory.
+
+    Args:
+        output_dir: Agent's output directory.
+        instance_id: The SWE-bench instance ID (for logging).
+        run_id: The --run_id passed to the harness.
+
+    Returns:
+        Report dict if found, None otherwise.
+    """
+    eval_dir = output_dir / "eval"
+    if not eval_dir.is_dir():
+        return None
+
+    report_file = eval_dir / f"{run_id}.{run_id}.json"
+    if report_file.exists():
+        try:
+            data = read_json(report_file)
+            if "resolved_ids" in data and "unresolved_ids" in data:
+                return data
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("Failed to read harness report: %s", report_file)
+    return None
+
+
 def find_harness_report(output_dir: Path) -> Optional[dict[str, Any]]:
     """Find the swebench harness report JSON file.
 
@@ -748,6 +781,114 @@ class Runner:
         """
         output_dir = self.config.output_dir / agent
         return summarize_results(output_dir, agent=agent)
+
+    def run_eval_instance(
+        self,
+        agent: str,
+        instance_id: str,
+        output_dir: Optional[Path] = None,
+        dataset_name: str = "princeton-nlp/SWE-bench_Verified",
+        swebench_py: Optional[Path] = None,
+    ) -> dict[str, Any]:
+        """Run swebench harness evaluation for a single instance.
+
+        Creates a temp predictions.jsonl with one entry, runs the harness,
+        folds the result, and cleans up the temp file.
+
+        Args:
+            agent: Agent name.
+            instance_id: SWE-bench instance ID to evaluate.
+            output_dir: Instance output directory (defaults to config).
+            dataset_name: HuggingFace dataset name.
+            swebench_py: Path to swebench Python (uses config if None).
+
+        Returns:
+            Dict with status and local_eval result.
+            On success: {"status": "completed", "local_eval": "resolved"/"failed"/"error"}
+            On failure: {"status": "harness_error"/"no_patch"/"no_report", "local_eval": None}
+        """
+        if output_dir is None:
+            output_dir = self.config.output_dir / agent
+
+        # Read patch from instance output directory
+        patch_file = output_dir / instance_id / "patch.diff"
+        if not patch_file.exists() or patch_file.stat().st_size == 0:
+            logger.warning("No patch found for %s, skipping eval", instance_id)
+            return {"status": "no_patch", "local_eval": None}
+
+        # Create unique run_id to avoid report collisions
+        run_id = f"{agent}_{instance_id}"
+
+        # Write single-entry predictions.jsonl to a temp file
+        preds_file = output_dir / f".tmp_predictions_{instance_id}.jsonl"
+        try:
+            patch_content = patch_file.read_text()
+            with open(preds_file, "w") as f:
+                f.write(json.dumps({
+                    "instance_id": instance_id,
+                    "model_name_or_path": agent,
+                    "model_patch": patch_content,
+                }) + "\n")
+
+            # Run swebench harness for this single instance
+            if swebench_py is None:
+                swebench_py = Path(".venv/swebench/bin/python").absolute()
+
+            import subprocess
+
+            report_dir = output_dir / "eval"
+            report_dir.mkdir(exist_ok=True)
+
+            cmd = [
+                str(swebench_py),
+                "-m", "swebench.harness.run_evaluation",
+                "--dataset_name", dataset_name,
+                "--split", "test",
+                "--predictions_path", str(preds_file.absolute()),
+                "--max_workers", "1",
+                "--cache_level", "instance",
+                "--report_dir", str(report_dir.absolute()),
+                "--run_id", run_id,
+                "-i", instance_id,
+            ]
+
+            logger.info("[EVAL] Running harness for %s (run_id=%s)", instance_id, run_id)
+            result = subprocess.run(cmd, cwd=str(output_dir))
+
+            if result.returncode != 0:
+                logger.error(
+                    "swebench harness failed for %s with exit code %d",
+                    instance_id, result.returncode,
+                )
+                return {"status": "harness_error", "local_eval": None}
+
+            # Find and fold harness results
+            report_data = find_harness_report_for_instance(output_dir, instance_id, run_id)
+            if report_data:
+                resolved = set(report_data.get("resolved_ids", []))
+                errored = set(report_data.get("error_ids", []))
+                unresolved = set(report_data.get("unresolved_ids", []))
+
+                if instance_id in resolved:
+                    local_eval = "resolved"
+                elif instance_id in errored:
+                    local_eval = "error"
+                else:
+                    local_eval = "failed"
+
+                logger.info("Eval for %s: %s", instance_id, local_eval)
+                return {"status": "completed", "local_eval": local_eval}
+            else:
+                logger.warning("No harness report found for %s", instance_id)
+                return {"status": "no_report", "local_eval": None}
+
+        finally:
+            # Always clean up temp predictions file
+            if preds_file.exists():
+                try:
+                    preds_file.unlink()
+                except OSError:
+                    pass
 
     def eval(self, agent: str) -> dict[str, Any]:
         """Run swebench harness evaluation for an agent.
