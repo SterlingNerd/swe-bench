@@ -1,8 +1,10 @@
-# Agents
+# Agents — Harness Development
 
-This directory holds **agent definitions**. Each subdirectory is one agent (e.g.
-`pi/`). The agent folder is the **source of truth**; the `bundle/` subdirectory
-inside it is a generated build artifact and must never be edited by hand.
+This directory holds **agent definitions** (harnesses). Each subdirectory is one
+agent (e.g. `pi/`). Use this directory to add new agents or update existing ones.
+
+> **Not for benchmarking.** To run benchmarks, see [`README.md`](../README.md).
+> This directory and its docs are for *developing* agent harnesses only.
 
 ## Agent folder schema
 
@@ -45,23 +47,23 @@ packages are copied verbatim into the bundle during the build.
 Builds a self-contained, relocatable bundle: downloads a pinned Node.js, installs
 the pinned `pi-coding-agent` CLI + dependencies, fetches `fd`/`ripgrep`, then copies
 `.pi/` config and `entrypoint.sh` into `bundle/`. Invoked by the harness
-(`swebench-orchestrator --build <agent>`).
+(`./run.sh build <agent>`).
 
 ### `bundle/` — GENERATED, gitignored
 The built package that gets injected into the agent container (`-v bundle:/agent:ro`).
 It is **not** source and is **not** tracked by git. Any edit made directly inside
 `bundle/` is lost on the next build.
 
-## How it plugs into the harness (`swebench-orchestrator`)
+## How it plugs into the harness
 
-- `swebench-orchestrator --build <agent>` → runs `build_bundle.sh` → produces `<agent>/bundle/`.
-- `swebench-orchestrator --run <agent> <instance>` (or `--run-all <agent>`):
-  - Requires `<agent>/bundle/` to exist (else: *"Run 'swebench-orchestrator --build <agent>' first"*).
-  - Mounts `${agent}/bundle` read-only at `/agent` and runs `/agent/entrypoint.sh`.
-  - Sets `SWE_OUTPUT_ROOT=/workspace/outputs` and bind-mounts
-    `<outputs>/<agent>` → `/workspace/outputs`, so the agent's output lands at
-    `<outputs>/<agent>/<instance_id>` on the host. After the container exits, the orchestrator
-    `docker cp`s the outputs out and removes the container.
+The orchestrator (see [`README.md`](../README.md)) mounts `<agent>/bundle` read-only
+at `/agent` and runs `/agent/entrypoint.sh`. It sets:
+
+- `SWE_OUTPUT_ROOT=/workspace/outputs` — agent writes per-instance output here
+- `SWE_AGENT_NAME=<agent>` — agent id
+
+After the container exits, the orchestrator `docker cp`s outputs out and removes
+the container.
 
 > **Output delivery — why both a bind mount and `docker cp`?**
 > This is deliberate, not redundant:
@@ -75,15 +77,13 @@ It is **not** source and is **not** tracked by git. Any edit made directly insid
 > The `docker cp` path must match where the agent actually writes
 > (`${SWE_OUTPUT_ROOT}/<instance_id>`); a mismatch there is the classic cause of
 > "Failed to copy outputs" errors.
-- `swebench-orchestrator --eval <agent>`: runs the official SWE-bench harness against
-  `<outputs>/<agent>/<instance_id>/patch.diff`.
 
 ## ⚠️ Rebuild rule (mandatory)
 
 **Any modification to an agent folder must be followed by a rebuild of that agent.**
 
 ```bash
-swebench-orchestrator --build <agent>      # regenerates <agent>/bundle/ from the folder
+./run.sh --build <agent>      # regenerates <agent>/bundle/ from the folder
 ```
 
 This applies to changes in `entrypoint.sh`, `.pi/*`, `build_bundle.sh`, or the
@@ -93,5 +93,5 @@ never persisted and silently drift from the source. Always change the folder and
 rebuild.
 
 > Note: `build_bundle.sh` resolves paths absolutely, so it works whether invoked via
-> `swebench-orchestrator --build <agent>` (absolute path) or directly
+> `./run.sh --build <agent>` (absolute path) or directly
 > (`bash harnesses/<agent>/build_bundle.sh harnesses/<agent>/bundle`, relative path).

@@ -55,47 +55,95 @@ Install dependencies and index the 500 verified instances:
 
 ```bash
 pip install -e ".[dev]"
-swebench-orchestrator index
+./run.sh index
 ```
 
 Build both agent bundles:
 
 ```bash
-swebench-orchestrator build
+./run.sh build
 ```
 
 Build only one agent, or force a fresh rebuild:
 
 ```bash
-swebench-orchestrator build codex
-swebench-orchestrator rebuild pi
+./run.sh build codex
+./run.sh rebuild pi
 ```
 
 Run either agent on the same instance:
 
 ```bash
-swebench-orchestrator run pi django__django-7530
-swebench-orchestrator run codex django__django-7530
+./run.sh run pi django__django-7530
+./run.sh run codex django__django-7530
 ```
 
-Run the full dataset with an enforced per-instance timeout. `--resume` skips
-only existing results for the selected agent:
+Install the swebench harness (needed for evaluation):
 
 ```bash
-swebench-orchestrator run-all codex --timeout 3600 --resume
+./run.sh init
 ```
 
-Install and invoke the official evaluator, then compare summaries:
+Use `./run.sh --help` for the complete command list.
+
+## Running Benchmarks
+
+The recommended workflow runs each instance through **work → eval → cleanup** in sequence:
 
 ```bash
-swebench-orchestrator init
-swebench-orchestrator eval pi
-swebench-orchestrator eval codex
-swebench-orchestrator summarize
-swebench-orchestrator status
+# Run all instances, interleaving work and eval per instance
+./run.sh run-all pi --timeout 3600
 ```
 
-Use `swebench-orchestrator --help` for the complete command and environment-variable list.
+This does three phases per instance:
+1. **Work** — runs the agent container, collects the patch
+2. **Eval** — runs the swebench harness on that single instance's patch
+3. **Cleanup** — removes the instance's Docker image to free disk
+
+Each phase completes before the next instance starts, so disk usage stays bounded.
+
+### Resuming interrupted runs
+
+`--resume` skips instances that already have a `result.json`:
+
+```bash
+./run.sh run-all pi --timeout 3600 --resume
+```
+
+### Checking progress
+
+```bash
+# Per-agent status with emoji indicators
+./run.sh status pi
+
+# All agents at once
+./run.sh status
+
+# Detailed summary table
+./run.sh summarize pi
+```
+
+Status symbols: ✓ resolved, ✗ failed, — no patch, ⌛ timed out, ! error, ? unknown.
+
+### Batch eval (legacy)
+
+`--eval` runs the harness on **all** collected patches at once. This is the old
+approach — it requires more disk (all images pulled simultaneously) and doesn't
+interleave work with eval. Prefer `run-all` for new runs. Use `--eval` only to
+evaluate patches from a run that didn't include eval:
+
+```bash
+./run.sh eval pi
+```
+
+### Single-instance run (no interleaved eval)
+
+`--run` executes the agent but does **not** run evaluation. Use this when you
+want to collect patches first and evaluate later:
+
+```bash
+./run.sh run pi django__django-7530
+```
 
 ## Output Contract
 
@@ -159,9 +207,12 @@ for setup instructions.
 
 ## Cleanup
 
-`swebench-orchestrator --cleanup` is deliberately narrow: it removes only containers named
-`swe_*` and images whose repository begins with `swebench/sweb.`. It does not
-prune or remove unrelated Docker resources.
+```bash
+./run.sh cleanup
+```
+
+Removes only containers named `swe_*` and images whose repository begins with
+`swebench/sweb.`. Does not prune or remove unrelated Docker resources.
 
 ## Logging
 
@@ -170,7 +221,7 @@ and file handlers. Logs are written to `workspace/run.log` by default.
 
 ```bash
 # Verbose output (DEBUG level)
-swebench-orchestrator -v run pi django__django-7530
+./run.sh -v run pi django__django-7530
 
 # Check the log file
 cat workspace/run.log

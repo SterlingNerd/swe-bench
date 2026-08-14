@@ -17,9 +17,11 @@ The goal is to compare agent performance on real-world GitHub issues in a reprod
 
 ### How it works
 
-1. **Build** an agent bundle (`swebench-orchestrator build <agent>`) — produces a relocatable container image with pinned dependencies.
-2. **Run** the agent on an instance (`swebench-orchestrator run pi <instance_id>`) — spins up the official SWE-bench Docker image, mounts the agent bundle read-only, and executes its entrypoint.
-3. **Evaluate** (`swebench-orchestrator eval pi`) — runs the official SWE-bench harness against collected patches.
+1. **Build** an agent bundle (`./run.sh build <agent>`) — produces a relocatable bundle with pinned dependencies.
+2. **Run** the agent on an instance (`./run.sh run pi <instance_id>` or `./run.sh run-all pi --resume`) — spins up the official SWE-bench Docker image, mounts the agent bundle read-only, and executes its entrypoint. `run-all` interleaves work→eval→cleanup per instance.
+3. **Evaluate** (`./run.sh eval pi`) — runs the official SWE-bench harness against collected patches (legacy batch mode; prefer `run-all`).
+
+See [`README.md`](./README.md) for benchmarking commands and [`harnesses/AGENTS.md`](./harnesses/AGENTS.md) for agent/harness development.
 
 ---
 
@@ -69,7 +71,7 @@ harnesses/
 **Any modification to an agent folder must be followed by a rebuild:**
 
 ```bash
-swebench-orchestrator --build <agent>      # regenerates <agent>/bundle/ from the folder
+./run.sh --build <agent>
 ```
 
 Editing files inside `bundle/` directly is forbidden — it is gitignored and overwritten on every build. Always change the source folder and rebuild.
