@@ -443,7 +443,7 @@ def status(ctx: click.Context, agent: str | None) -> None:
             elif status == "no_patch":
                 no_patch += 1
                 click.echo(click.style("—", fg="yellow"), nl=False)
-                click.echo(f" {instance_dir.name} (no patch)")
+                click.echo(f" {instance_dir.name} (agent completed, no files modified)")
             elif status == "timed_out":
                 timed_out += 1
                 click.echo(click.style("⌛", fg="yellow"), nl=False)

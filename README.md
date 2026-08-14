@@ -123,7 +123,7 @@ Each phase completes before the next instance starts, so disk usage stays bounde
 ./run.sh summarize pi
 ```
 
-Status symbols: ✓ resolved, ✗ failed, — no patch, ⌛ timed out, ! error, ? unknown.
+Status symbols: ✓ resolved, ✗ failed, — no patch (agent completed without modifying files), ⌛ timed out, ! error, ? unknown.
 
 ### Batch eval (legacy)
 
@@ -159,9 +159,11 @@ workspace/outputs/<agent>/<instance_id>/
 ```
 
 Possible pre-evaluation statuses include `patch_collected`, `no_patch`,
-`agent_error`, `container_error`, and `timed_out`. `--eval` adds `local_eval`
-and promotes the status to `resolved`, `failed`, or `error` while preserving
-the original agent metadata.
+`agent_error`, `container_error`, and `timed_out`. `no_patch` means the agent
+ran to completion (exit code 0) but did not modify any files in the repository —
+it is a legitimate result, not an error. `--eval` adds `local_eval` and promotes
+the status to `resolved`, `failed`, or `error` while preserving the original
+agent metadata.
 
 Aggregate files such as `predictions.jsonl`, `summary.json`, and evaluator
 reports stay inside `workspace/outputs/<agent>/`. This prevents a Pi run from

@@ -890,7 +890,10 @@ class Runner:
         # Read patch from instance output directory
         patch_file = output_dir / instance_id / "patch.diff"
         if not patch_file.exists() or patch_file.stat().st_size == 0:
-            logger.warning("No patch found for %s, skipping eval", instance_id)
+            logger.warning(
+                "Agent completed for %s but produced no patch (agent signaled completion without modifying files), skipping eval",
+                instance_id,
+            )
             return {"status": "no_patch", "local_eval": None}
 
         # Create unique run_id to avoid report collisions

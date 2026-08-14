@@ -120,7 +120,7 @@ elif [ "$AGENT_EXIT_CODE" -ne 0 ]; then
     echo "  ERROR: Agent failed without generating a patch."
 else
     STATUS="no_patch"
-    echo "  WARNING: No patch generated (0 bytes)"
+    echo "  Agent completed without modifying files (0-byte patch)."
 fi
 
 RESULT_STATUS="$STATUS" PATCH_SIZE="$PATCH_SIZE" ELAPSED="$ELAPSED" \

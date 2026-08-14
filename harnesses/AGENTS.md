@@ -38,6 +38,14 @@ executes `/agent/entrypoint.sh`. Contract:
 - **Output files** written under `${SWE_OUTPUT_ROOT}/<instance_id>/`:
   `patch.diff`, `result.json`, `meta.json`, `agent_output.txt`,
   `problem_statement.txt`, `pi-sessions/`, `eval/`.
+- **Result statuses** in `result.json`:
+  - `patch_collected` — agent modified files and produced a non-empty patch
+  - `no_patch` — agent ran to completion (exit code 0) but did not modify any files;
+    this is a legitimate result indicating the agent could not or chose not to produce
+    a fix, not a crash or container error
+  - `agent_error` — agent exited with a non-zero exit code
+  - `container_error` — container failed before the agent could complete
+  - `timed_out` — agent exceeded the configured timeout
 
 ### `.pi/`
 pi CLI configuration. `settings.json`/`models.json`/`auth.json` and any `npm/`
