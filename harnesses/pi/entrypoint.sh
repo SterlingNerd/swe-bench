@@ -100,8 +100,9 @@ if [ "$AGENT_EXIT_CODE" -ne 0 ]; then
 fi
 
 # Extract patch via git diff (from inside the repo)
-# Stage all changes first
 echo "  Extracting patch..."
+
+# Stage all changes first
 git add -A 2>/dev/null || true
 
 # If there are staged changes but no commit, create one to ensure clean diff
@@ -112,7 +113,7 @@ if ! git diff --cached --quiet; then
 fi
 
 # Diff from base commit to current HEAD (includes agent commit if made)
-git diff --binary "$BASE_COMMIT" > "${OUTPUT_DIR}/patch.diff" 2>/dev/null || {
+git diff --binary "$BASE_COMMIT" > "${OUTPUT_DIR}/patch.diff" 2>&1 || {
     echo "  WARNING: git diff failed"
     touch "${OUTPUT_DIR}/patch.diff"
 }

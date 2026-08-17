@@ -776,6 +776,7 @@ class Runner:
         instance_id: str,
         timeout: int = 3600,
         run_id: Optional[str] = None,
+        cleanup_image: bool = True,
     ) -> dict[str, Any]:
         """Run an agent against a single instance.
 
@@ -784,6 +785,7 @@ class Runner:
             instance_id: SWE-bench instance ID.
             timeout: Maximum runtime in seconds.
             run_id: Run ID for manifest tracking (creates new if None).
+            cleanup_image: Whether to remove the Docker image after the run.
 
         Returns:
             Result dict with status and timing.
@@ -811,7 +813,7 @@ class Runner:
             docker_ops=self.docker_ops,
             registry=self.config.swebench_registry,
             threshold_pct=self.config.max_storage_pct,
-            cleanup_image=True,
+            cleanup_image=cleanup_image,
         )
 
         # Update attempt result
