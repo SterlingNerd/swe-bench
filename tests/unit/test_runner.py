@@ -281,7 +281,7 @@ class TestRunnerUsesConfig:
 
         # Patch run_instance to capture calls
         with patch("swebench_orchestrator.runner.run_instance") as mock_run:
-            mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+            mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1, "attempt_id": "attempt-001"}
             runner.run_instance("pi", "django__django-11039")
 
             # Verify run_instance was called with correct cache_file from config
@@ -315,7 +315,7 @@ class TestRunnerUsesConfig:
 
         # Patch run_instance to capture check_storage calls
         with patch("swebench_orchestrator.runner.run_instance") as mock_run:
-            mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+            mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1, "attempt_id": "attempt-001"}
             runner.run_instance("pi", "django__django-11039")
 
             # Verify run_instance was called with correct cache_file from config
@@ -340,13 +340,32 @@ class TestRunnerUsesConfig:
             }])
         )
 
+        # Create output dir with patch (so eval doesn't return no_patch)
+        output_dir = config.output_dir / "pi"
+        instance_dir = output_dir / "django__django-11039"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "patch.diff").write_text("diff --git a/test b/test\n+fix")
+
+        # Create eval report so eval returns resolved
+        eval_dir = output_dir / "eval"
+        eval_dir.mkdir()
+        (eval_dir / "pi_django__django-11039.pi_django__django-11039.json").write_text(
+            json.dumps({"resolved_ids": ["django__django-11039"], "unresolved_ids": [], "error_ids": []})
+        )
+
         # Mock run_instance to avoid actual Docker calls
-        with patch.object(runner, "run_instance") as mock_run:
-            mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+        with patch.object(runner, "run_instance") as mock_run, \
+             patch.object(runner, "run_eval_instance") as mock_eval, \
+             patch.object(runner.docker_ops, "remove_image") as mock_remove:
+            mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1, "attempt_id": "attempt-001"}
+            mock_eval.return_value = {"status": "completed", "local_eval": "resolved"}
+            mock_remove.return_value = True
             result = runner.run_all("pi", timeout=3600)
 
-            assert result["run"] == 1
-            assert result["skipped"] == 0
+            assert result["resolved"] == 1
+            assert result["no_answer"] == 0
+            assert result["timeout"] == 0
+            assert result["error"] == 0
 
 
 class TestFoldHarnessResults:
@@ -616,16 +635,36 @@ class TestRunnerRunAllWaitForContainers:
             }])
         )
 
+        # Create output dir with patch (so eval doesn't return no_patch)
+        output_dir = config.output_dir / "pi"
+        instance_dir = output_dir / "django__django-11039"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "patch.diff").write_text("diff --git a/test b/test\n+fix")
+
+        # Create eval report so eval returns resolved
+        eval_dir = output_dir / "eval"
+        eval_dir.mkdir()
+        (eval_dir / "pi_django__django-11039.pi_django__django-11039.json").write_text(
+            json.dumps({"resolved_ids": ["django__django-11039"], "unresolved_ids": [], "error_ids": []})
+        )
+
         # Mock wait_for_agent_containers to verify it's called
         with patch.object(runner.docker_ops, "wait_for_agent_containers") as mock_wait:
             mock_wait.return_value = True
-            with patch.object(runner, "run_instance") as mock_run:
-                mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+            with patch.object(runner, "run_instance") as mock_run, \
+                 patch.object(runner, "run_eval_instance") as mock_eval, \
+                 patch.object(runner.docker_ops, "remove_image") as mock_remove:
+                mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1, "attempt_id": "attempt-001"}
+                mock_eval.return_value = {"status": "completed", "local_eval": "resolved"}
+                mock_remove.return_value = True
                 result = runner.run_all("pi", timeout=3600)
 
                 # Verify wait was called before any run_instance calls
                 mock_wait.assert_called_once_with("pi", timeout_seconds=3600)
-                assert result["run"] == 1
+                assert result["resolved"] == 1
+                assert result["no_answer"] == 0
+                assert result["timeout"] == 0
+                assert result["error"] == 0
 
     def test_run_all_logs_wait_progress(self, tmp_path: Path):
         """run_all should log progress while waiting for containers."""
@@ -644,10 +683,27 @@ class TestRunnerRunAllWaitForContainers:
             }])
         )
 
+        # Create output dir with patch (so eval doesn't return no_patch)
+        output_dir = config.output_dir / "pi"
+        instance_dir = output_dir / "django__django-11039"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "patch.diff").write_text("diff --git a/test b/test\n+fix")
+
+        # Create eval report so eval returns resolved
+        eval_dir = output_dir / "eval"
+        eval_dir.mkdir()
+        (eval_dir / "pi_django__django-11039.pi_django__django-11039.json").write_text(
+            json.dumps({"resolved_ids": ["django__django-11039"], "unresolved_ids": [], "error_ids": []})
+        )
+
         with patch.object(runner.docker_ops, "wait_for_agent_containers") as mock_wait:
             mock_wait.return_value = True
-            with patch.object(runner, "run_instance") as mock_run:
-                mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+            with patch.object(runner, "run_instance") as mock_run, \
+                 patch.object(runner, "run_eval_instance") as mock_eval, \
+                 patch.object(runner.docker_ops, "remove_image") as mock_remove:
+                mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1, "attempt_id": "attempt-001"}
+                mock_eval.return_value = {"status": "completed", "local_eval": "resolved"}
+                mock_remove.return_value = True
                 with patch("swebench_orchestrator.runner.logger") as mock_logger:
                     result = runner.run_all("pi", timeout=3600)
                     # Should log that it's waiting for containers
@@ -670,15 +726,35 @@ class TestRunnerRunAllWaitForContainers:
             }])
         )
 
+        # Create output dir with patch (so eval doesn't return no_patch)
+        output_dir = config.output_dir / "pi"
+        instance_dir = output_dir / "django__django-11039"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "patch.diff").write_text("diff --git a/test b/test\n+fix")
+
+        # Create eval report so eval returns resolved
+        eval_dir = output_dir / "eval"
+        eval_dir.mkdir()
+        (eval_dir / "pi_django__django-11039.pi_django__django-11039.json").write_text(
+            json.dumps({"resolved_ids": ["django__django-11039"], "unresolved_ids": [], "error_ids": []})
+        )
+
         with patch.object(runner.docker_ops, "wait_for_agent_containers") as mock_wait:
             # Wait times out (returns False) but run should still proceed
             mock_wait.return_value = False
-            with patch.object(runner, "run_instance") as mock_run:
-                mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+            with patch.object(runner, "run_instance") as mock_run, \
+                 patch.object(runner, "run_eval_instance") as mock_eval, \
+                 patch.object(runner.docker_ops, "remove_image") as mock_remove:
+                mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1, "attempt_id": "attempt-001"}
+                mock_eval.return_value = {"status": "completed", "local_eval": "resolved"}
+                mock_remove.return_value = True
                 result = runner.run_all("pi", timeout=3600)
 
                 # Should still run the instance after force-killing stale containers
-                assert result["run"] == 1
+                assert result["resolved"] == 1
+                assert result["no_answer"] == 0
+                assert result["timeout"] == 0
+                assert result["error"] == 0
 
 
 class TestRunnerMethods:
@@ -718,21 +794,36 @@ class TestRunnerMethods:
             }])
         )
 
-        # Create existing result for first instance (output_dir = workspace/outputs)
+        # Create existing result for first instance with local_eval=resolved
         output_dir = config.output_dir / "pi"
         (output_dir / "django__django-11039").mkdir(parents=True)
         (output_dir / "django__django-11039" / "result.json").write_text(
-            '{"status": "patch_collected"}'
+            '{"status": "patch_collected", "local_eval": "resolved"}'
         )
 
-        with patch.object(runner, "run_instance") as mock_run:
-            mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1}
+        # Create output dir with patch for flask (so eval doesn't return no_patch)
+        (output_dir / "flask__flask-1000").mkdir(parents=True)
+        (output_dir / "flask__flask-1000" / "patch.diff").write_text("diff --git a/test b/test\n+fix")
+
+        # Create eval report so eval returns resolved
+        eval_dir = output_dir / "eval"
+        eval_dir.mkdir()
+        (eval_dir / "pi_flask__flask-1000.pi_flask__flask-1000.json").write_text(
+            json.dumps({"resolved_ids": ["flask__flask-1000"], "unresolved_ids": [], "error_ids": []})
+        )
+
+        with patch.object(runner, "run_instance") as mock_run, \
+             patch.object(runner, "run_eval_instance") as mock_eval, \
+             patch.object(runner.docker_ops, "remove_image") as mock_remove:
+            mock_run.return_value = {"status": "patch_collected", "exit_code": 0, "elapsed_seconds": 1, "attempt_id": "attempt-001"}
+            mock_eval.return_value = {"status": "completed", "local_eval": "resolved"}
+            mock_remove.return_value = True
             result = runner.run_all("pi", timeout=3600, resume=True)
 
-            # Should skip django, run flask
-            assert result["run"] == 1
-            assert result["skipped"] == 1
-            assert result["failed"] == 0
+            # Should skip django (pre-existing), run flask (new)
+            assert result["total"] == 2
+            assert result["resolved"] == 2  # django pre-existing + flask new
+            assert result["no_answer"] == 0
             # Only called once (for flask)
             mock_run.assert_called_once()
 
@@ -757,8 +848,9 @@ class TestRunnerMethods:
             mock_run.side_effect = RuntimeError("Docker not available")
             result = runner.run_all("pi", timeout=3600)
 
-            assert result["run"] == 1
-            assert result["failed"] == 1
+            assert result["total"] == 1
+            assert result["error"] == 1
+            assert result["resolved"] == 0
 
     def test_runner_summarize(self, tmp_path: Path):
         """Runner.summarize should delegate to summarize_results."""
@@ -848,16 +940,18 @@ class TestRunnerMethods:
         with patch.object(runner, "run_instance") as mock_run_instance, \
              patch.object(runner, "run_eval_instance") as mock_run_eval, \
              patch.object(runner.docker_ops, "remove_image") as mock_remove:
-            mock_run_instance.return_value = {"status": "patch_collected", "elapsed_seconds": 42}
+            mock_run_instance.return_value = {"status": "patch_collected", "elapsed_seconds": 42, "attempt_id": "attempt-001"}
             mock_run_eval.return_value = {"status": "completed", "local_eval": "resolved"}
             mock_remove.return_value = True
 
             result = runner.run_all("pi", timeout=3600)
 
-            # Should have run once, skipped 0, failed 0
-            assert result["run"] == 1
-            assert result["skipped"] == 0
-            assert result["failed"] == 0
+            # Should have run once
+            assert result["total"] == 1
+            assert result["resolved"] == 1
+            assert result["no_answer"] == 0
+            assert result["timeout"] == 0
+            assert result["error"] == 0
 
             # Verify interleaved order: work → eval → remove_image
             mock_run_instance.assert_called_once()
@@ -890,12 +984,13 @@ class TestRunnerMethods:
              patch.object(runner, "run_eval_instance") as mock_run_eval, \
              patch.object(runner.docker_ops, "remove_image") as mock_remove:
             # Work phase fails
-            mock_run_instance.return_value = {"status": "timed_out", "elapsed_seconds": 3600}
+            mock_run_instance.return_value = {"status": "timed_out", "elapsed_seconds": 3600, "attempt_id": "attempt-001"}
 
             result = runner.run_all("pi", timeout=3600)
 
-            assert result["run"] == 1
-            assert result["failed"] == 1
+            assert result["total"] == 1
+            assert result["timeout"] == 1
+            assert result["resolved"] == 0
 
             # Eval and image removal should NOT be called when work fails
             mock_run_eval.assert_not_called()
@@ -1006,3 +1101,319 @@ class TestFoldHarnessResultsLogging:
             mock_logger.info.assert_called()
             call_args = mock_logger.info.call_args
             assert "2" in str(call_args)
+
+
+class TestRunAllStats:
+    """Tests for run_all stats initialization and return values."""
+
+    def test_run_all_initializes_stats_from_existing_results(self, tmp_path: Path):
+        """run_all should read existing results and initialize stats at startup."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "cache.json",
+        )
+        runner = Runner(config)
+
+        # Create cache with 3 instances
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }, {
+                "instance_id": "flask__flask-1000",
+                "repo": "pallets/flask",
+                "base_commit": "def456",
+                "problem_statement": "Fix another bug",
+            }, {
+                "instance_id": "requests__requests-1234",
+                "repo": "psf/requests",
+                "base_commit": "ghi789",
+                "problem_statement": "Fix yet another bug",
+            }])
+        )
+
+        # Create existing results with different statuses
+        output_dir = config.output_dir / "pi"
+        
+        # Resolved instance
+        resolved_dir = output_dir / "django__django-11039"
+        resolved_dir.mkdir(parents=True)
+        (resolved_dir / "result.json").write_text(
+            '{"status": "patch_collected", "local_eval": "resolved"}'
+        )
+        
+        # Failed (no_answer) instance
+        failed_dir = output_dir / "flask__flask-1000"
+        failed_dir.mkdir(parents=True)
+        (failed_dir / "result.json").write_text(
+            '{"status": "patch_collected", "local_eval": "failed"}'
+        )
+        
+        # Timed out instance
+        timeout_dir = output_dir / "requests__requests-1234"
+        timeout_dir.mkdir(parents=True)
+        (timeout_dir / "result.json").write_text(
+            '{"status": "timed_out"}'
+        )
+
+        # With resume=True, should skip all pre-existing and return just their stats
+        with patch.object(runner, "run_instance") as mock_run, \
+             patch.object(runner, "run_eval_instance") as mock_eval, \
+             patch.object(runner.docker_ops, "remove_image") as mock_remove:
+            mock_run.return_value = {"status": "patch_collected", "elapsed_seconds": 42, "attempt_id": "attempt-001"}
+            mock_eval.return_value = {"status": "completed", "local_eval": "resolved"}
+            mock_remove.return_value = True
+
+            result = runner.run_all("pi", timeout=3600, resume=True)
+
+            # Should skip all 3 pre-existing, run 0 new
+            assert result["total"] == 3
+            assert result["resolved"] == 1
+            assert result["no_answer"] == 1
+            assert result["timeout"] == 1
+            assert result["error"] == 0
+            mock_run.assert_not_called()  # No new runs
+            mock_eval.assert_not_called()  # No evals
+
+    def test_run_all_stats_update_on_new_runs(self, tmp_path: Path):
+        """run_all should update stats as new instances complete."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "cache.json",
+        )
+        runner = Runner(config)
+
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }, {
+                "instance_id": "flask__flask-1000",
+                "repo": "pallets/flask",
+                "base_commit": "def456",
+                "problem_statement": "Fix another bug",
+            }, {
+                "instance_id": "requests__requests-1234",
+                "repo": "psf/requests",
+                "base_commit": "ghi789",
+                "problem_statement": "Fix yet another bug",
+            }])
+        )
+
+        # Pre-existing: 1 resolved, 1 no_answer
+        output_dir = config.output_dir / "pi"
+        resolved_dir = output_dir / "django__django-11039"
+        resolved_dir.mkdir(parents=True)
+        (resolved_dir / "result.json").write_text(
+            '{"status": "patch_collected", "local_eval": "resolved"}'
+        )
+        failed_dir = output_dir / "flask__flask-1000"
+        failed_dir.mkdir(parents=True)
+        (failed_dir / "result.json").write_text(
+            '{"status": "patch_collected", "local_eval": "failed"}'
+        )
+
+        # Create eval report for new instance
+        new_dir = output_dir / "requests__requests-1234"
+        new_dir.mkdir(parents=True)
+        (new_dir / "patch.diff").write_text("diff --git a/test b/test\n+fix")
+
+        eval_dir = output_dir / "eval"
+        eval_dir.mkdir()
+        (eval_dir / "pi_requests__requests-1234.pi_requests__requests-1234.json").write_text(
+            json.dumps({"resolved_ids": ["requests__requests-1234"], "unresolved_ids": [], "error_ids": []})
+        )
+
+        with patch.object(runner, "run_instance") as mock_run, \
+             patch.object(runner, "run_eval_instance") as mock_eval, \
+             patch.object(runner.docker_ops, "remove_image") as mock_remove:
+            # Return different eval results for different instances
+            def eval_side_effect(agent, instance_id, output_dir, dataset_name, swebench_py):
+                if instance_id == "requests__requests-1234":
+                    return {"status": "completed", "local_eval": "resolved"}
+                return {"status": "completed", "local_eval": "failed"}
+            
+            mock_run.return_value = {"status": "patch_collected", "elapsed_seconds": 42, "attempt_id": "attempt-001"}
+            mock_eval.side_effect = eval_side_effect
+            mock_remove.return_value = True
+
+            # With resume=True, should skip pre-existing and only run the new instance
+            result = runner.run_all("pi", timeout=3600, resume=True)
+
+            # 2 pre-existing + 1 new resolved
+            assert result["total"] == 3
+            assert result["resolved"] == 2  # django (pre-existing) + requests (new)
+            assert result["no_answer"] == 1  # flask (pre-existing)
+            assert result["timeout"] == 0
+            assert result["error"] == 0
+            # Only called once (for requests)
+            assert mock_run.call_count == 1
+
+    def test_run_all_counts_work_phase_timeout(self, tmp_path: Path):
+        """run_all should count timed_out work phase as timeout."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "cache.json",
+        )
+        runner = Runner(config)
+
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        with patch.object(runner, "run_instance") as mock_run:
+            mock_run.return_value = {"status": "timed_out", "elapsed_seconds": 3600, "attempt_id": "attempt-001"}
+
+            result = runner.run_all("pi", timeout=3600)
+
+            assert result["total"] == 1
+            assert result["timeout"] == 1
+            assert result["resolved"] == 0
+
+    def test_run_all_counts_work_phase_container_error(self, tmp_path: Path):
+        """run_all should count container_error work phase as error."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "cache.json",
+        )
+        runner = Runner(config)
+
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        with patch.object(runner, "run_instance") as mock_run:
+            mock_run.return_value = {"status": "container_error", "elapsed_seconds": 10, "attempt_id": "attempt-001"}
+
+            result = runner.run_all("pi", timeout=3600)
+
+            assert result["total"] == 1
+            assert result["error"] == 1
+            assert result["resolved"] == 0
+
+    def test_run_all_counts_exception_as_error(self, tmp_path: Path):
+        """run_all should count exceptions as error."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "cache.json",
+        )
+        runner = Runner(config)
+
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        with patch.object(runner, "run_instance") as mock_run:
+            mock_run.side_effect = RuntimeError("Docker not available")
+
+            result = runner.run_all("pi", timeout=3600)
+
+            assert result["total"] == 1
+            assert result["error"] == 1
+            assert result["resolved"] == 0
+
+    def test_run_all_counts_eval_error(self, tmp_path: Path):
+        """run_all should count eval error as error."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "cache.json",
+        )
+        runner = Runner(config)
+
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }])
+        )
+
+        output_dir = config.output_dir / "pi"
+        new_dir = output_dir / "django__django-11039"
+        new_dir.mkdir(parents=True)
+        (new_dir / "patch.diff").write_text("diff --git a/test b/test\n+fix")
+
+        with patch.object(runner, "run_instance") as mock_run, \
+             patch.object(runner, "run_eval_instance") as mock_eval, \
+             patch.object(runner.docker_ops, "remove_image") as mock_remove:
+            mock_run.return_value = {"status": "patch_collected", "elapsed_seconds": 42, "attempt_id": "attempt-001"}
+            mock_eval.return_value = {"status": "completed", "local_eval": "error"}
+            mock_remove.return_value = True
+
+            result = runner.run_all("pi", timeout=3600)
+
+            assert result["total"] == 1
+            assert result["error"] == 1
+            assert result["resolved"] == 0
+
+    def test_run_all_logs_stats_at_start_of_each_instance(self, tmp_path: Path):
+        """run_all should log stats at the start of each instance."""
+        config = Config(
+            repo_root=tmp_path,
+            cache_file=tmp_path / "cache.json",
+        )
+        runner = Runner(config)
+
+        config.cache_file.write_text(
+            json.dumps([{
+                "instance_id": "django__django-11039",
+                "repo": "django/django",
+                "base_commit": "abc123",
+                "problem_statement": "Fix bug",
+            }, {
+                "instance_id": "flask__flask-1000",
+                "repo": "pallets/flask",
+                "base_commit": "def456",
+                "problem_statement": "Fix another bug",
+            }])
+        )
+
+        # Pre-existing: 1 resolved
+        output_dir = config.output_dir / "pi"
+        resolved_dir = output_dir / "django__django-11039"
+        resolved_dir.mkdir(parents=True)
+        (resolved_dir / "result.json").write_text(
+            '{"status": "patch_collected", "local_eval": "resolved"}'
+        )
+
+        with patch.object(runner, "run_instance") as mock_run, \
+             patch.object(runner, "run_eval_instance") as mock_eval, \
+             patch.object(runner.docker_ops, "remove_image") as mock_remove, \
+             patch("swebench_orchestrator.runner.logger") as mock_logger:
+            mock_run.return_value = {"status": "patch_collected", "elapsed_seconds": 42, "attempt_id": "attempt-001"}
+            mock_eval.return_value = {"status": "completed", "local_eval": "resolved"}
+            mock_remove.return_value = True
+
+            runner.run_all("pi", timeout=3600)
+
+            # Verify logging was called with stats format
+            # The mock calls contain the format string as args[0], then values
+            info_calls = mock_logger.info.call_args_list
+            # Should have logged stats for each instance
+            stats_logs = [call for call in info_calls if "completed:" in str(call)]
+            assert len(stats_logs) == 2  # 2 instances
+            # First instance (pre-existing resolved) should show completed: 1, resolved: 1
+            # Check the args passed to the logger (args[0] is format string)
+            args = stats_logs[0].args
+            assert args[4] == 1  # completed count (args[1]=idx, args[2]=total, args[3]=iid, args[4]=completed)
+            assert args[5] == 1  # resolved count

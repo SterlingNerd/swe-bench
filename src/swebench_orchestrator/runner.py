@@ -33,6 +33,27 @@ from swebench_orchestrator.storage import check_storage
 logger = logging.getLogger(__name__)
 
 
+def _normalize_local_eval(local_eval: Any) -> Optional[str]:
+    """Normalize local_eval to a string value.
+
+    Handles both formats:
+    - New string format: "resolved", "failed", "error"
+    - Legacy dict format: {"resolved": true/false, "error": true/false}
+
+    Returns:
+        "resolved", "failed", "error", or None if not determinable.
+    """
+    if isinstance(local_eval, str):
+        return local_eval
+    if isinstance(local_eval, dict):
+        if local_eval.get("error"):
+            return "error"
+        if local_eval.get("resolved"):
+            return "resolved"
+        return "failed"
+    return None
+
+
 def run_instance(
     agents_dir: Path,
     agent: str,
@@ -402,11 +423,14 @@ def summarize_results(output_dir: Path, agent: Optional[str] = None) -> dict[str
         })
 
     total = len(rows)
-    resolved = sum(1 for r in rows if r["local_eval"] == "resolved")
-    failed = sum(1 for r in rows if r["local_eval"] == "failed")
-    errored = sum(1 for r in rows if r["local_eval"] == "error")
+    # Normalize local_eval for both string and legacy dict formats
+    normalized = [_normalize_local_eval(r.get("local_eval")) for r in rows]
+    resolved = sum(1 for v in normalized if v == "resolved")
+    failed = sum(1 for v in normalized if v == "failed")
+    errored = sum(1 for v in normalized if v == "error")
     no_patch = sum(1 for r in rows if r["status"] == "no_patch")
     timed_out = sum(1 for r in rows if r["status"] == "timed_out")
+    patch_collected = sum(1 for r in rows if r["status"] == "patch_collected")
     agent_errors = sum(
         1 for r in rows
         if r["status"] in ("agent_error", "container_error")
@@ -420,6 +444,7 @@ def summarize_results(output_dir: Path, agent: Optional[str] = None) -> dict[str
         "errored": errored,
         "no_patch": no_patch,
         "timed_out": timed_out,
+        "patch_collected": patch_collected,
         "agent_errors": agent_errors,
         "rows": rows,
     }
@@ -766,6 +791,8 @@ class Runner:
             elapsed_seconds=result.get("elapsed_seconds", 0),
         )
 
+        # Include attempt_id in return for callers that need it
+        result["attempt_id"] = attempt.attempt_id
         return result
 
     def _ensure_run(self, agent: str, timeout: int) -> tuple[str, RunManifest]:
@@ -807,7 +834,7 @@ class Runner:
             resume: Skip instances that already have results.
 
         Returns:
-            Dict with run statistics (run, skipped, failed counts).
+            Dict with run statistics (total, resolved, no_answer, timeout, error).
         """
         # Safety net: wait for any stale containers from interrupted runs
         logger.info("Waiting for any running %s containers to finish...", agent)
@@ -819,33 +846,92 @@ class Runner:
         # Get all instances from cache
         dataset_cache = DatasetCache(self.config.cache_file)
         instance_ids = [inst["instance_id"] for inst in dataset_cache.data]
+        total = len(instance_ids)
+
+        # Read existing results to initialize stats
+        output_dir = self.config.output_dir / agent
+        success = 0
+        no_answer = 0
+        timeout_count = 0
+        error_count = 0
+        pending_eval = 0
+        pre_existing = 0
+        if output_dir.is_dir():
+            for instance_dir in output_dir.iterdir():
+                if not instance_dir.is_dir() or instance_dir.name in ("eval", "logs"):
+                    continue
+                result_file = instance_dir / "result.json"
+                if result_file.exists():
+                    pre_existing += 1
+                    try:
+                        from swebench_orchestrator.models import read_json
+                        meta = read_json(result_file)
+                        local_eval = _normalize_local_eval(meta.get("local_eval"))
+                        status = meta.get("status", "")
+                        if local_eval == "resolved":
+                            success += 1
+                        elif local_eval == "failed":
+                            no_answer += 1
+                        elif local_eval == "error":
+                            error_count += 1
+                        elif status == "timed_out":
+                            timeout_count += 1
+                        elif status == "patch_collected":
+                            # Patch generated but eval not run yet
+                            pending_eval += 1
+                        else:
+                            # Unknown status - count as error
+                            error_count += 1
+                    except (json.JSONDecodeError, ValueError):
+                        # Invalid JSON, count as error
+                        error_count += 1
 
         count = 0
-        skipped = 0
-        failed = 0
 
-        for iid in instance_ids:
+        for idx, iid in enumerate(instance_ids):
+            # Print stats at start of each instance
+            # completed = resolved + no_answer + timeout + error (not pending_eval)
+            completed = success + no_answer + timeout_count + error_count
+            logger.info(
+                "[%d/%d] %s | completed: %d | resolved: %d | no_answer: %d | timeout: %d | error: %d | pending: %d",
+                idx + 1, total, iid, completed, success, no_answer, timeout_count, error_count, pending_eval
+            )
+
             if resume:
                 result_file = self.config.output_dir / agent / iid / "result.json"
                 if result_file.exists():
-                    skipped += 1
+                    # Already counted in initial scan, just skip
                     continue
 
             count += 1
             try:
-                # Create attempt for manifest tracking
-                attempt = self.run_manager.create_attempt(run_id, iid)
-
                 # Phase 1: Work — run agent, produce patch
-                result = self.run_instance(agent, iid, timeout)
+                # run_instance creates its own attempt and returns attempt_id
+                result = self.run_instance(agent, iid, timeout, run_id=run_id)
+
+                attempt_id = result.get("attempt_id")
+                if not attempt_id:
+                    logger.error("No attempt_id returned for %s after run_instance", iid)
+                    error_count += 1
+                    continue
                 work_status = result.get("status", "unknown")
 
-                if work_status in ("timed_out", "container_error", "copy_failed"):
-                    failed += 1
+                if work_status == "timed_out":
+                    timeout_count += 1
                     # Update manifest with work result; skip eval on failure
                     self.run_manager.update_attempt_result(
                         run_id,
-                        attempt.attempt_id,
+                        attempt_id,
+                        status=work_status,
+                        elapsed_seconds=result.get("elapsed_seconds", 0),
+                    )
+                    continue
+                elif work_status in ("container_error", "copy_failed"):
+                    error_count += 1
+                    # Update manifest with work result; skip eval on failure
+                    self.run_manager.update_attempt_result(
+                        run_id,
+                        attempt_id,
                         status=work_status,
                         elapsed_seconds=result.get("elapsed_seconds", 0),
                     )
@@ -854,7 +940,7 @@ class Runner:
                 # Update manifest with work result
                 self.run_manager.update_attempt_result(
                     run_id,
-                    attempt.attempt_id,
+                    attempt_id,
                     status=work_status,
                     elapsed_seconds=result.get("elapsed_seconds", 0),
                 )
@@ -873,15 +959,19 @@ class Runner:
                 # Update manifest with eval result
                 self.run_manager.update_attempt_result(
                     run_id,
-                    attempt.attempt_id,
+                    attempt_id,
                     status=work_status,
                     elapsed_seconds=result.get("elapsed_seconds", 0),
                     local_eval=local_eval,
                 )
 
-                # Count as failed only when eval explicitly reports failure/error
-                if local_eval in ("failed", "error"):
-                    failed += 1
+                # Count based on eval result
+                if local_eval == "resolved":
+                    success += 1
+                elif local_eval == "failed":
+                    no_answer += 1
+                elif local_eval == "error":
+                    error_count += 1
 
                 # Phase 3: Cleanup — remove the instance's Docker image
                 image_name = instance_to_image_name(iid, registry=self.config.swebench_registry)
@@ -889,12 +979,15 @@ class Runner:
 
             except Exception as e:
                 logger.error("Failed to run %s: %s", iid, e)
-                failed += 1
+                error_count += 1
 
         return {
-            "run": count,
-            "skipped": skipped,
-            "failed": failed,
+            "total": total,
+            "resolved": success,
+            "no_answer": no_answer,
+            "timeout": timeout_count,
+            "error": error_count,
+            "pending_eval": pending_eval,
         }
 
     def summarize(self, agent: str) -> dict[str, Any]:
@@ -995,6 +1088,8 @@ class Runner:
             # Find and fold harness results
             report_data = find_harness_report_for_instance(output_dir, instance_id, run_id)
             if report_data:
+                # Fold results into result.json so local_eval is persisted
+                fold_harness_results(output_dir, report_data)
                 resolved = set(report_data.get("resolved_ids", []))
                 errored = set(report_data.get("error_ids", []))
                 unresolved = set(report_data.get("unresolved_ids", []))

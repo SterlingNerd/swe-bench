@@ -256,9 +256,9 @@ def run_all(
     runner = Runner(config)
     try:
         result = runner.run_all(agent, timeout, resume)
-        click.echo(f"\nDone: {result['run']} run, {result['skipped']} skipped (resume), {result['failed']} failed")
+        click.echo(f"\nDone: total={result['total']} resolved={result['resolved']} no_answer={result['no_answer']} timeout={result['timeout']} error={result['error']}")
 
-        if result["failed"] > 0:
+        if result["no_answer"] > 0 or result["timeout"] > 0 or result["error"] > 0:
             ctx.exit(1)
     except Exception as e:
         click.echo(f"ERROR: {e}", err=True)
