@@ -953,15 +953,11 @@ class TestRunnerMethods:
             assert result["timeout"] == 0
             assert result["error"] == 0
 
-            # Verify interleaved order: work → eval → remove_image
+            # Verify interleaved order: work → eval (image cleanup now happens inside run_instance)
             mock_run_instance.assert_called_once()
             mock_run_eval.assert_called_once()
-            mock_remove.assert_called_once()
-
-            # Verify remove_image was called with the correct image name
-            image_name = mock_remove.call_args.args[0]
-            assert "django" in image_name
-            assert "11039" in image_name
+            # Image cleanup is now handled by run_instance internally (cleanup_image=True by default)
+            # run_all no longer calls remove_image directly
 
     def test_run_all_skips_eval_on_work_failure(self, tmp_path: Path):
         """run_all should skip eval when work phase fails."""
@@ -1417,3 +1413,47 @@ class TestRunAllStats:
             args = stats_logs[0].args
             assert args[4] == 1  # completed count (args[1]=idx, args[2]=total, args[3]=iid, args[4]=completed)
             assert args[5] == 1  # resolved count
+
+
+class TestNormalizeLocalEval:
+    """Tests for _normalize_local_eval helper."""
+
+    def test_string_resolved(self):
+        from swebench_orchestrator.runner import _normalize_local_eval
+        assert _normalize_local_eval("resolved") == "resolved"
+
+    def test_string_failed(self):
+        from swebench_orchestrator.runner import _normalize_local_eval
+        assert _normalize_local_eval("failed") == "failed"
+
+    def test_string_error(self):
+        from swebench_orchestrator.runner import _normalize_local_eval
+        assert _normalize_local_eval("error") == "error"
+
+    def test_dict_resolved_true(self):
+        from swebench_orchestrator.runner import _normalize_local_eval
+        assert _normalize_local_eval({"resolved": True}) == "resolved"
+
+    def test_dict_resolved_false(self):
+        from swebench_orchestrator.runner import _normalize_local_eval
+        assert _normalize_local_eval({"resolved": False}) == "failed"
+
+    def test_dict_error_true(self):
+        from swebench_orchestrator.runner import _normalize_local_eval
+        assert _normalize_local_eval({"resolved": False, "error": True}) == "error"
+
+    def test_dict_error_false(self):
+        from swebench_orchestrator.runner import _normalize_local_eval
+        assert _normalize_local_eval({"resolved": False, "error": False}) == "failed"
+
+    def test_none_returns_none(self):
+        from swebench_orchestrator.runner import _normalize_local_eval
+        assert _normalize_local_eval(None) is None
+
+    def test_empty_dict_returns_failed(self):
+        from swebench_orchestrator.runner import _normalize_local_eval
+        assert _normalize_local_eval({}) == "failed"
+
+    def test_unknown_string_returns_as_is(self):
+        from swebench_orchestrator.runner import _normalize_local_eval
+        assert _normalize_local_eval("unknown") == "unknown"

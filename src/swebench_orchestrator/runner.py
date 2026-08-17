@@ -64,6 +64,7 @@ def run_instance(
     docker_ops: Optional[DockerOps] = None,
     registry: str = "swebench",
     threshold_pct: float = 80.0,
+    cleanup_image: bool = True,
 ) -> dict[str, Any]:
     """Run an agent against a single SWE-bench instance.
 
@@ -210,6 +211,13 @@ def run_instance(
             elapsed_seconds=elapsed,
         )
         logger.error("%s/%s timed out after %ds", agent, instance_id, timeout)
+        # Cleanup: remove the instance's Docker image to save disk space
+        if cleanup_image:
+            try:
+                docker_ops.remove_image(image_name)
+                logger.info("Removed image: %s", image_name)
+            except Exception as e:
+                logger.warning("Failed to remove image %s: %s", image_name, e)
         return {
             "status": "timed_out",
             "exit_code": result.exit_code,
@@ -228,6 +236,13 @@ def run_instance(
             elapsed_seconds=elapsed,
         )
         logger.error("%s/%s container exited with code %d", agent, instance_id, result.exit_code)
+        # Cleanup: remove the instance's Docker image to save disk space
+        if cleanup_image:
+            try:
+                docker_ops.remove_image(image_name)
+                logger.info("Removed image: %s", image_name)
+            except Exception as e:
+                logger.warning("Failed to remove image %s: %s", image_name, e)
         return {
             "status": "container_error",
             "exit_code": result.exit_code,
@@ -291,6 +306,13 @@ def run_instance(
 
     if not cp_ok:
         logger.error("Failed to copy outputs from container")
+        # Cleanup: remove the instance's Docker image to save disk space
+        if cleanup_image:
+            try:
+                docker_ops.remove_image(image_name)
+                logger.info("Removed image: %s", image_name)
+            except Exception as e:
+                logger.warning("Failed to remove image %s: %s", image_name, e)
         return {
             "status": "copy_failed",
             "exit_code": 1,
@@ -326,6 +348,14 @@ def run_instance(
             write_json(result_file, data)
         except (json.JSONDecodeError, ValueError):
             pass
+
+    # Cleanup: remove the instance's Docker image to save disk space
+    if cleanup_image:
+        try:
+            docker_ops.remove_image(image_name)
+            logger.info("Removed image: %s", image_name)
+        except Exception as e:
+            logger.warning("Failed to remove image %s: %s", image_name, e)
 
     return {
         "status": final_status,
@@ -781,6 +811,7 @@ class Runner:
             docker_ops=self.docker_ops,
             registry=self.config.swebench_registry,
             threshold_pct=self.config.max_storage_pct,
+            cleanup_image=True,
         )
 
         # Update attempt result
@@ -973,9 +1004,7 @@ class Runner:
                 elif local_eval == "error":
                     error_count += 1
 
-                # Phase 3: Cleanup — remove the instance's Docker image
-                image_name = instance_to_image_name(iid, registry=self.config.swebench_registry)
-                self.docker_ops.remove_image(image_name)
+                # Image cleanup is now handled by run_instance
 
             except Exception as e:
                 logger.error("Failed to run %s: %s", iid, e)

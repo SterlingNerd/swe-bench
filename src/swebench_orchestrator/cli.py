@@ -235,6 +235,117 @@ def run(
         ctx.exit(1)
 
 
+@main.command("run_many")
+@click.argument("agent")
+@click.argument("instance_ids", nargs=-1, required=False)
+@click.option("--timeout", "-t", default=3600, type=int, help="Timeout per instance (default: 3600)")
+@click.option("--run-id", default=None, help="Run ID for manifest tracking")
+@click.option("--file", "-f", type=click.Path(exists=True), help="File with instance IDs (one per line)")
+@click.option("--stdin", is_flag=True, help="Read instance IDs from stdin")
+@click.pass_context
+def run_list_cmd(
+    ctx: click.Context,
+    agent: str,
+    instance_ids: tuple[str, ...],
+    timeout: int,
+    run_id: str | None,
+    file: str | None,
+    stdin: bool,
+) -> None:
+    """Run an agent against a list of instances.
+
+    Provide instance IDs as arguments, from a file (--file), or from stdin (--stdin).
+    """
+    config = ctx.obj["config"]
+
+    # Collect instance IDs from all sources
+    ids = [*instance_ids]
+    if file:
+        with open(file) as f:
+            ids.extend([line.strip() for line in f if line.strip() and not line.startswith('#')])
+    if stdin:
+        import sys
+        ids.extend([line.strip() for line in sys.stdin if line.strip() and not line.startswith('#')])
+
+    if not ids:
+        click.echo("ERROR: No instance IDs provided. Use arguments, --file, or --stdin.", err=True)
+        ctx.exit(2)
+
+    runner = Runner(config)
+    failed_count = 0
+    eval_count = 0
+    eval_failed = 0
+    
+    for i, iid in enumerate(ids, 1):
+        click.echo(f"[{i}/{len(ids)}] Running {iid}...")
+        try:
+            # Phase 1: Work — run agent, produce patch
+            result = runner.run_instance(agent, iid, timeout, run_id)
+            attempt_id = result.get("attempt_id")
+            work_status = result.get("status", "unknown")
+            elapsed = result.get("elapsed_seconds", 0)
+            click.echo(f"  Work: {work_status} ({elapsed}s)")
+
+            if work_status in ("timed_out", "container_error", "copy_failed"):
+                failed_count += 1
+                continue
+
+            # Phase 2: Eval — run harness for this single instance
+            click.echo(f"  Evaluating {iid}...")
+            eval_result = runner.run_eval_instance(
+                agent=agent,
+                instance_id=iid,
+                output_dir=config.output_dir / agent,
+                dataset_name=config.hf_dataset,
+                swebench_py=config.swebench_py if config.swebench_py.exists() else None,
+            )
+            local_eval = eval_result.get("local_eval")
+            
+            # Update manifest with eval result
+            if attempt_id:
+                runner.run_manager.update_attempt_result(
+                    run_id if run_id else "",
+                    attempt_id,
+                    status=work_status,
+                    elapsed_seconds=elapsed,
+                    local_eval=local_eval,
+                )
+
+            click.echo(f"  Eval: {local_eval}")
+            
+            if local_eval is None:
+                # No patch to evaluate - this is expected for no_patch cases
+                click.echo(f"  (no patch to evaluate)")
+            else:
+                eval_count += 1
+                if local_eval == "resolved":
+                    pass  # success
+                elif local_eval == "failed":
+                    pass  # failed but evaluated
+                elif local_eval == "error":
+                    eval_failed += 1
+                else:
+                    eval_failed += 1
+                    click.echo(f"  WARNING: eval status unknown: {local_eval}", err=True)
+
+            # Phase 3: Cleanup — remove the instance's Docker image
+            from swebench_orchestrator.models import instance_to_image_name
+            image_name = instance_to_image_name(iid, registry=config.swebench_registry)
+            runner.docker_ops.remove_image(image_name)
+            click.echo(f"  Cleaned up image: {image_name}")
+
+        except ValueError as e:
+            click.echo(f"  ERROR: {e}", err=True)
+            failed_count += 1
+        except Exception as e:
+            click.echo(f"  ERROR: {e}", err=True)
+            failed_count += 1
+
+    click.echo(f"\nCompleted {len(ids)} instances: {failed_count} work failed, {eval_count} evaluated ({eval_failed} eval errors).")
+    if failed_count:
+        ctx.exit(1)
+
+
 @main.command()
 @click.argument("agent")
 @click.option("--timeout", "-t", default=3600, type=int, help="Timeout per instance (default: 3600)")
