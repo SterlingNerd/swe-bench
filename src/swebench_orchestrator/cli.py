@@ -205,6 +205,7 @@ def rebuild(ctx: click.Context, scope: str) -> None:
 @click.argument("instance_id")
 @click.option("--timeout", "-t", default=3600, type=int, help="Timeout in seconds (default: 3600)")
 @click.option("--run-id", default=None, help="Run ID for manifest tracking")
+@click.option("--no-cleanup", is_flag=True, help="Do not remove the Docker image after the run")
 @click.pass_context
 def run(
     ctx: click.Context,
@@ -212,6 +213,7 @@ def run(
     instance_id: str,
     timeout: int,
     run_id: str | None,
+    no_cleanup: bool,
 ) -> None:
     """Run an agent against a single instance."""
     config = ctx.obj["config"]
@@ -223,7 +225,7 @@ def run(
 
     runner = Runner(config)
     try:
-        result = runner.run_instance(agent, instance_id, timeout, run_id)
+        result = runner.run_instance(agent, instance_id, timeout, run_id, cleanup_image=not no_cleanup)
         status = result.get("status", "unknown")
         elapsed = result.get("elapsed_seconds", 0)
         click.echo(f"Result: {status} ({elapsed}s)")

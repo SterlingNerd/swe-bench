@@ -217,11 +217,14 @@ class TestRunAllErrorHandling:
         runner = Runner(config)
         runner.docker_ops = FailingDockerOps()
 
-        result = runner.run_all("test-agent")
+        # Mock run_eval_instance to avoid calling real SWE-bench harness
+        with patch.object(runner, "run_eval_instance") as mock_eval:
+            mock_eval.return_value = {"status": "completed", "local_eval": "resolved"}
+            result = runner.run_all("test-agent")
 
         # First instance succeeds, second times out
         assert result["run"] == 2
-        assert result["failed"] == 1  # One timed out
+        assert result["timeout"] == 1  # One timed out
 
 
 class TestRunAllStatistics:
@@ -242,8 +245,11 @@ class TestRunAllStatistics:
         runner = Runner(config)
         runner.docker_ops = MockDockerOpsForRunAll()
 
-        result = runner.run_all("test-agent", resume=True)
+        # Mock run_eval_instance to avoid calling real SWE-bench harness
+        with patch.object(runner, "run_eval_instance") as mock_eval:
+            mock_eval.return_value = {"status": "completed", "local_eval": "resolved"}
+            result = runner.run_all("test-agent", resume=True)
 
         assert result["run"] == 1  # Only flask instance run
         assert result["skipped"] == 1  # django skipped
-        assert result["failed"] == 0  # No failures
+        assert result["timeout"] == 0  # No timeouts

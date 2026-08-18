@@ -158,7 +158,20 @@ def run_instance(
 
     # Build Docker command
     started_at = time.time()
-    import os as _os
+    import os
+    host_uid = os.getuid()
+    host_gid = os.getgid()
+    
+    # Pre-chown output directory to avoid permission issues from previous root-owned runs
+    try:
+        for root, dirs, files in os.walk(str(output_dir_resolved)):
+            for d in dirs:
+                os.chown(os.path.join(root, d), host_uid, host_gid)
+            for f in files:
+                os.chown(os.path.join(root, f), host_uid, host_gid)
+    except OSError:
+        pass
+    
     docker_flags = [
         "--memory", "32g",
         "--memory-swap", "64g",
@@ -169,10 +182,10 @@ def run_instance(
         "--add-host", "host.docker.internal:host-gateway",
         "-e", f"SWE_AGENT_NAME={agent}",
         "-e", f"SWE_OUTPUT_ROOT=/workspace/outputs/{agent}",
+        "-e", f"HOST_UID={host_uid}",
+        "-e", f"HOST_GID={host_gid}",
         "-v", f"{bundle_dir}:/agent:ro",
         "-v", f"{output_dir_resolved}:/workspace/outputs",
-        # Run as host user to avoid permission issues with mounted volumes
-        "--user", f"{_os.getuid()}:{_os.getgid()}",
     ]
 
     command = [
@@ -257,52 +270,21 @@ def run_instance(
         container_state = docker_ops.inspect_container_state(container_name)
         logger.info("Container state after run: %s", container_state or "unknown")
 
-        if docker_ops.copy_from_container(
-            container_name,
-            f"/workspace/outputs/{agent}/{instance_id}",
-            cp_tmp,
-        ):
-            # Ensure instance output dir exists (container creates it in real runs,
-            # but mocked tests need us to create it).
-            instance_output_dir.mkdir(parents=True, exist_ok=True)
+        # Files are already on host via volume mount, no need for docker cp
+        # Just verify the instance output directory exists and has files
+        if instance_output_dir.exists() and any(instance_output_dir.iterdir()):
+            cp_ok = True
+        else:
+            logger.warning("No output files found in instance directory")
+            cp_ok = False
 
-            # Flatten: docker cp nests the instance dir (single level).
-            nested = cp_tmp / instance_id
-            if nested.is_dir():
-                for item in nested.iterdir():
-                    dest = instance_output_dir / item.name
-                    if dest.exists():
-                        import shutil
-                        if dest.is_dir():
-                            shutil.rmtree(dest)
-                        else:
-                            dest.unlink()
-                    item.rename(dest)
-                cp_ok = True
-            else:
-                # Copy directly if no nesting (files placed directly in cp_tmp)
-                for item in cp_tmp.iterdir():
-                    dest = instance_output_dir / item.name
-                    if dest.exists():
-                        import shutil
-                        if dest.is_dir():
-                            shutil.rmtree(dest)
-                        else:
-                            dest.unlink()
-                    item.rename(dest)
-                cp_ok = True
-
-        if not cp_ok:
-            logger.warning("Copy succeeded but no output files found")
-
-    finally:
-        # Clean up temp dir
+        # Clean up temp dir (not used but kept for compatibility)
         if cp_tmp.exists():
             import shutil
             shutil.rmtree(cp_tmp, ignore_errors=True)
-
-    # Remove container after copying outputs
-    docker_ops.remove_container(container_name)
+    finally:
+        # Remove container after copying outputs
+        docker_ops.remove_container(container_name)
 
     if not cp_ok:
         logger.error("Failed to copy outputs from container")
@@ -776,6 +758,7 @@ class Runner:
         instance_id: str,
         timeout: int = 3600,
         run_id: Optional[str] = None,
+        cleanup_image: bool = True,
     ) -> dict[str, Any]:
         """Run an agent against a single instance.
 
@@ -784,6 +767,7 @@ class Runner:
             instance_id: SWE-bench instance ID.
             timeout: Maximum runtime in seconds.
             run_id: Run ID for manifest tracking (creates new if None).
+            cleanup_image: Whether to remove the Docker image after the run.
 
         Returns:
             Result dict with status and timing.
@@ -811,7 +795,7 @@ class Runner:
             docker_ops=self.docker_ops,
             registry=self.config.swebench_registry,
             threshold_pct=self.config.max_storage_pct,
-            cleanup_image=True,
+            cleanup_image=cleanup_image,
         )
 
         # Update attempt result
@@ -918,6 +902,7 @@ class Runner:
                         error_count += 1
 
         count = 0
+        skipped = 0
 
         for idx, iid in enumerate(instance_ids):
             # Print stats at start of each instance
@@ -932,6 +917,7 @@ class Runner:
                 result_file = self.config.output_dir / agent / iid / "result.json"
                 if result_file.exists():
                     # Already counted in initial scan, just skip
+                    skipped += 1
                     continue
 
             count += 1
@@ -1017,6 +1003,8 @@ class Runner:
             "timeout": timeout_count,
             "error": error_count,
             "pending_eval": pending_eval,
+            "skipped": skipped,
+            "run": count,
         }
 
     def summarize(self, agent: str) -> dict[str, Any]:

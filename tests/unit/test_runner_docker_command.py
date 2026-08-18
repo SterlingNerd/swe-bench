@@ -123,11 +123,11 @@ class TestDockerCommandConstruction:
                 )
 
     def test_container_runs_as_host_user(self, tmp_path: Path):
-        """Container should run as the host user to avoid permission issues.
+        """Container should run as root with HOST_UID/HOST_GID env vars for entrypoint.
 
-        Bug fix: When container runs as root and creates files in mounted volumes,
-        the host user can't access them (chown fails on Docker/WSL).
-        Running as the host user ensures files are created with correct ownership.
+        The entrypoint handles permission fixing: it chowns /testbed and output dirs
+        to the host user, then runs the agent as that user via runuser.
+        This avoids Docker/WSL chown issues while still letting the agent write.
         """
         import os
         agents_dir, cache_file = self._setup_mocks(tmp_path)
@@ -153,13 +153,25 @@ class TestDockerCommandConstruction:
         call_args = docker_ops.run_container.call_args
         flags = call_args.kwargs["flags"] if call_args.kwargs else call_args[1]["flags"]
 
-        # Check for --user flag with correct UID:GID
-        assert "--user" in flags, f"Expected --user flag in: {flags}"
-        user_idx = flags.index("--user")
-        expected_user = f"{os.getuid()}:{os.getgid()}"
-        assert flags[user_idx + 1] == expected_user, (
-            f"Expected --user {expected_user}, got: {flags[user_idx + 1]}"
-        )
+        # Check for HOST_UID/HOST_GID env vars instead of --user flag
+        assert "-e" in flags
+        host_uid_idx = flags.index("-e") + 1
+        # Find HOST_UID env var
+        host_uid_found = False
+        host_gid_found = False
+        for i, flag in enumerate(flags):
+            if flag == "-e" and i + 1 < len(flags):
+                env_val = flags[i + 1]
+                if env_val.startswith("HOST_UID="):
+                    host_uid_found = True
+                    assert env_val == f"HOST_UID={os.getuid()}", f"Expected HOST_UID={os.getuid()}, got {env_val}"
+                elif env_val.startswith("HOST_GID="):
+                    host_gid_found = True
+                    assert env_val == f"HOST_GID={os.getgid()}", f"Expected HOST_GID={os.getgid()}, got {env_val}"
+        assert host_uid_found, f"HOST_UID not found in flags: {flags}"
+        assert host_gid_found, f"HOST_GID not found in flags: {flags}"
+        # Should NOT have --user flag
+        assert "--user" not in flags, f"Should not have --user flag, got: {flags}"
 
     def test_instance_output_dir_not_pre_created(self, tmp_path: Path):
         """Instance output directory should NOT be pre-created before container runs.
