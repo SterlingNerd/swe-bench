@@ -67,15 +67,18 @@ if [ "$(id -u)" = "0" ]; then
             useradd -u "${HOST_UID}" -g "${HOST_GID}" -m -s /bin/bash "${RUN_USER}" 2>/dev/null || true
         fi
     fi
+    # Clean up previous run's output directory to avoid permission issues
+    rm -rf "${OUTPUT_DIR}"
+echo "DEBUG: After rm, ls -la ${OUTPUT_DIR}: $(ls -la ${OUTPUT_DIR} 2>/dev/null || echo "Directory does not exist")"
+echo "DEBUG: Removing OUTPUT_DIR: ${OUTPUT_DIR}"
     chown -R "${HOST_UID}:${HOST_GID}" /testbed 2>/dev/null || true
     # Also ensure output dir is writable
     chown -R "${HOST_UID}:${HOST_GID}" "${OUTPUT_ROOT}" 2>/dev/null || true
     # Fix config dir permissions for agent
     chown -R "${HOST_UID}:${HOST_GID}" "${PI_CONFIG_DIR}" 2>/dev/null || true
-    # Run agent as host user
-    RUN_AS="runuser -u ${RUN_USER} --"
-else
-    RUN_AS=""
+    # Ensure output dir exists with correct ownership
+    mkdir -p "${OUTPUT_DIR}" "${OUTPUT_DIR}/eval" "${OUTPUT_DIR}/pi-sessions"
+    chown -R "${HOST_UID}:${HOST_GID}" "${OUTPUT_DIR}" 2>/dev/null || true
 fi
 
 echo "=============================================================================="
@@ -90,10 +93,9 @@ BASE_COMMIT="${3:?Missing base_commit}"
 PROBLEM_STATEMENT="${4:?Missing problem_statement}"
 
 # --- Setup output dir ---
-mkdir -p "${OUTPUT_DIR}/eval"
 
 # Save problem metadata (use python3 for proper JSON escaping)
-python3 -c "
+cat > /tmp/meta.py << 'PYEOF'
 import json, sys
 meta = {
     'instance_id': sys.argv[1],
@@ -102,22 +104,38 @@ meta = {
     'agent': sys.argv[5]
 }
 json.dump(meta, open(sys.argv[4], 'w'))
-" "${INSTANCE_ID}" "${REPO_URL}" "${BASE_COMMIT}" "${OUTPUT_DIR}/meta.json" "${SWE_AGENT_NAME:-pi}"
+PYEOF
+python3 /tmp/meta.py "${INSTANCE_ID}" "${REPO_URL}" "${BASE_COMMIT}" "${OUTPUT_DIR}/meta.json" "${SWE_AGENT_NAME:-pi}"
 echo "${PROBLEM_STATEMENT}" > "${OUTPUT_DIR}/problem_statement.txt"
 
 # Use swebench's /testbed (repo already at base commit)
 REPO_DIR="/testbed"
 cd "$REPO_DIR" || { echo "ERROR: Cannot cd to $REPO_DIR"; exit 1; }
 
-# Run the agent using the bundled pi CLI (from inside the repo)
-echo "  Running agent in $REPO_DIR..."
-START_TIME=$(date +%s)
-AGENT_OUTPUT="${OUTPUT_DIR}/agent_output.txt"
+# --- Run agent ---
 SESSION_DIR="${OUTPUT_DIR}/pi-sessions"
 mkdir -p "${SESSION_DIR}"
 
+# Run agent as host user (with cd to repo dir since runuser changes cwd)
+if [ "$(id -u)" = "0" ]; then
+    cat > /tmp/run_agent.sh << EOF
+cd /testbed || { echo "ERROR: cd failed"; pwd; exit 1; }
+GIT_OPTS="--git-dir=/testbed/.git --work-tree=/testbed" && exec pi -p --session-dir "${SESSION_DIR}" "${PROBLEM_STATEMENT}" 2>&1
+echo "DEBUG: pwd before git: $(pwd)"
+EOF
+    chmod +x /tmp/run_agent.sh
+    RUN_AS="runuser -u ${RUN_USER} -- /tmp/run_agent.sh"
+else
+    RUN_AS="pi -p --session-dir "${SESSION_DIR}" "${PROBLEM_STATEMENT}" 2>&1"
+fi
+
+echo "  Running agent in $REPO_DIR..."
+START_TIME=$(date +%s)
+AGENT_OUTPUT="${OUTPUT_DIR}/agent_output.txt"
+
 set +e
-${RUN_AS} pi -p --session-dir "${SESSION_DIR}" "${PROBLEM_STATEMENT}" 2>&1 | tee "${AGENT_OUTPUT}"
+${RUN_AS} | tee "${AGENT_OUTPUT}"
+echo "DEBUG: Running agent with RUN_AS: ${RUN_AS}"
 AGENT_EXIT_CODE=${PIPESTATUS[0]}
 set -e
 if [ "$AGENT_EXIT_CODE" -ne 0 ]; then
@@ -126,22 +144,25 @@ fi
 
 # Extract patch via git diff (from inside the repo)
 echo "  Extracting patch..."
+cd /testbed || { echo "ERROR: cd failed"; pwd; exit 1; }
+GIT_OPTS="--git-dir=/testbed/.git --work-tree=/testbed"
+echo "DEBUG: pwd before git: $(pwd)"
 
 # Stage all changes first
-git add -A 2>/dev/null || true
+git $GIT_OPTS add -A 2>/dev/null || true
 
 # If there are staged changes but no commit, create one to ensure clean diff
-if ! git diff --cached --quiet; then
+if ! git $GIT_OPTS diff --quiet; then
     echo "  Committing agent changes..."
-    git -c user.name="swe-agent" -c user.email="swe-agent@swebench" \
+    git $GIT_OPTS -c user.name="swe-agent" -c user.email="swe-agent@swebench" \
         commit -m "Agent changes for ${INSTANCE_ID}" 2>/dev/null || true
 fi
 
 # Diff from base commit to current HEAD (includes agent commit if made)
-git diff --binary "$BASE_COMMIT" > "${OUTPUT_DIR}/patch.diff" 2>/dev/null || {
+if ! git $GIT_OPTS diff --binary "$BASE_COMMIT" > "${OUTPUT_DIR}/patch.diff" 2>/dev/null; then
     echo "  WARNING: git diff failed"
     touch "${OUTPUT_DIR}/patch.diff"
-}
+fi
 
 PATCH_SIZE=$(wc -c < "${OUTPUT_DIR}/patch.diff" 2>/dev/null || echo 0)
 END_TIME=$(date +%s)
@@ -156,6 +177,11 @@ elif [ "$AGENT_EXIT_CODE" -ne 0 ]; then
 else
     STATUS="no_patch"
     echo "  Agent completed without modifying files (0-byte patch)."
+fi
+
+# Fix output permissions if running as root
+if [ "$(id -u)" = "0" ]; then
+    chown -R "${HOST_UID}:${HOST_GID}" "${OUTPUT_DIR}" 2>/dev/null || true
 fi
 
 RESULT_STATUS="$STATUS" PATCH_SIZE="$PATCH_SIZE" ELAPSED="$ELAPSED" \
@@ -173,10 +199,5 @@ result = {
 with open(os.environ["RESULT_FILE"], "w") as handle:
     json.dump(result, handle, indent=2)
 PY
-
-# Fix output permissions if running as root
-if [ "$(id -u)" = "0" ]; then
-    chown -R "${HOST_UID}:${HOST_GID}" "${OUTPUT_DIR}" 2>/dev/null || true
-fi
 
 echo "  Output: ${OUTPUT_DIR}/"

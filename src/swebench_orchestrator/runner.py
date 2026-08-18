@@ -270,52 +270,21 @@ def run_instance(
         container_state = docker_ops.inspect_container_state(container_name)
         logger.info("Container state after run: %s", container_state or "unknown")
 
-        if docker_ops.copy_from_container(
-            container_name,
-            f"/workspace/outputs/{agent}/{instance_id}",
-            cp_tmp,
-        ):
-            # Ensure instance output dir exists (container creates it in real runs,
-            # but mocked tests need us to create it).
-            instance_output_dir.mkdir(parents=True, exist_ok=True)
+        # Files are already on host via volume mount, no need for docker cp
+        # Just verify the instance output directory exists and has files
+        if instance_output_dir.exists() and any(instance_output_dir.iterdir()):
+            cp_ok = True
+        else:
+            logger.warning("No output files found in instance directory")
+            cp_ok = False
 
-            # Flatten: docker cp nests the instance dir (single level).
-            nested = cp_tmp / instance_id
-            if nested.is_dir():
-                for item in nested.iterdir():
-                    dest = instance_output_dir / item.name
-                    if dest.exists():
-                        import shutil
-                        if dest.is_dir():
-                            shutil.rmtree(dest)
-                        else:
-                            dest.unlink()
-                    item.rename(dest)
-                cp_ok = True
-            else:
-                # Copy directly if no nesting (files placed directly in cp_tmp)
-                for item in cp_tmp.iterdir():
-                    dest = instance_output_dir / item.name
-                    if dest.exists():
-                        import shutil
-                        if dest.is_dir():
-                            shutil.rmtree(dest)
-                        else:
-                            dest.unlink()
-                    item.rename(dest)
-                cp_ok = True
-
-        if not cp_ok:
-            logger.warning("Copy succeeded but no output files found")
-
-    finally:
-        # Clean up temp dir
+        # Clean up temp dir (not used but kept for compatibility)
         if cp_tmp.exists():
             import shutil
             shutil.rmtree(cp_tmp, ignore_errors=True)
-
-    # Remove container after copying outputs
-    docker_ops.remove_container(container_name)
+    finally:
+        # Remove container after copying outputs
+        docker_ops.remove_container(container_name)
 
     if not cp_ok:
         logger.error("Failed to copy outputs from container")
