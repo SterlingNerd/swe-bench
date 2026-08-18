@@ -53,6 +53,31 @@ export PATH="${NODE_BIN}:${PATH}"
 export HOME="/tmp"
 export PI_CODING_AGENT_DIR="${PI_CONFIG_DIR}"
 
+# --- Fix permissions for /testbed (owned by root in image) ---
+HOST_UID="${HOST_UID:-$(id -u)}"
+HOST_GID="${HOST_GID:-$(id -g)}"
+if [ "$(id -u)" = "0" ]; then
+    # Running as root: use existing nonroot user (UID 1000) or create one matching host
+    if [ "${HOST_UID}" = "1000" ] && [ "${HOST_GID}" = "1000" ]; then
+        RUN_USER="nonroot"
+    else
+        RUN_USER="hostuser"
+        if ! id -u "${RUN_USER}" >/dev/null 2>&1; then
+            groupadd -g "${HOST_GID}" "${RUN_USER}" 2>/dev/null || true
+            useradd -u "${HOST_UID}" -g "${HOST_GID}" -m -s /bin/bash "${RUN_USER}" 2>/dev/null || true
+        fi
+    fi
+    chown -R "${HOST_UID}:${HOST_GID}" /testbed 2>/dev/null || true
+    # Also ensure output dir is writable
+    chown -R "${HOST_UID}:${HOST_GID}" "${OUTPUT_ROOT}" 2>/dev/null || true
+    # Fix config dir permissions for agent
+    chown -R "${HOST_UID}:${HOST_GID}" "${PI_CONFIG_DIR}" 2>/dev/null || true
+    # Run agent as host user
+    RUN_AS="runuser -u ${RUN_USER} --"
+else
+    RUN_AS=""
+fi
+
 echo "=============================================================================="
 echo "SWE-bench Agent: ${INSTANCE_ID}"
 echo "Agent bundle: ${AGENT_BUNDLE}"
@@ -92,7 +117,7 @@ SESSION_DIR="${OUTPUT_DIR}/pi-sessions"
 mkdir -p "${SESSION_DIR}"
 
 set +e
-pi -p --session-dir "${SESSION_DIR}" "${PROBLEM_STATEMENT}" 2>&1 | tee "${AGENT_OUTPUT}"
+${RUN_AS} pi -p --session-dir "${SESSION_DIR}" "${PROBLEM_STATEMENT}" 2>&1 | tee "${AGENT_OUTPUT}"
 AGENT_EXIT_CODE=${PIPESTATUS[0]}
 set -e
 if [ "$AGENT_EXIT_CODE" -ne 0 ]; then
@@ -113,7 +138,7 @@ if ! git diff --cached --quiet; then
 fi
 
 # Diff from base commit to current HEAD (includes agent commit if made)
-git diff --binary "$BASE_COMMIT" > "${OUTPUT_DIR}/patch.diff" 2>&1 || {
+git diff --binary "$BASE_COMMIT" > "${OUTPUT_DIR}/patch.diff" 2>/dev/null || {
     echo "  WARNING: git diff failed"
     touch "${OUTPUT_DIR}/patch.diff"
 }
@@ -148,5 +173,10 @@ result = {
 with open(os.environ["RESULT_FILE"], "w") as handle:
     json.dump(result, handle, indent=2)
 PY
+
+# Fix output permissions if running as root
+if [ "$(id -u)" = "0" ]; then
+    chown -R "${HOST_UID}:${HOST_GID}" "${OUTPUT_DIR}" 2>/dev/null || true
+fi
 
 echo "  Output: ${OUTPUT_DIR}/"

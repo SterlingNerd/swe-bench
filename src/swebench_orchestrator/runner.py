@@ -158,7 +158,20 @@ def run_instance(
 
     # Build Docker command
     started_at = time.time()
-    import os as _os
+    import os
+    host_uid = os.getuid()
+    host_gid = os.getgid()
+    
+    # Pre-chown output directory to avoid permission issues from previous root-owned runs
+    try:
+        for root, dirs, files in os.walk(str(output_dir_resolved)):
+            for d in dirs:
+                os.chown(os.path.join(root, d), host_uid, host_gid)
+            for f in files:
+                os.chown(os.path.join(root, f), host_uid, host_gid)
+    except OSError:
+        pass
+    
     docker_flags = [
         "--memory", "32g",
         "--memory-swap", "64g",
@@ -169,10 +182,10 @@ def run_instance(
         "--add-host", "host.docker.internal:host-gateway",
         "-e", f"SWE_AGENT_NAME={agent}",
         "-e", f"SWE_OUTPUT_ROOT=/workspace/outputs/{agent}",
+        "-e", f"HOST_UID={host_uid}",
+        "-e", f"HOST_GID={host_gid}",
         "-v", f"{bundle_dir}:/agent:ro",
         "-v", f"{output_dir_resolved}:/workspace/outputs",
-        # Run as host user to avoid permission issues with mounted volumes
-        "--user", f"{_os.getuid()}:{_os.getgid()}",
     ]
 
     command = [
