@@ -933,6 +933,7 @@ class Runner:
                         error_count += 1
 
         count = 0
+        skipped = 0
 
         for idx, iid in enumerate(instance_ids):
             # Print stats at start of each instance
@@ -947,6 +948,7 @@ class Runner:
                 result_file = self.config.output_dir / agent / iid / "result.json"
                 if result_file.exists():
                     # Already counted in initial scan, just skip
+                    skipped += 1
                     continue
 
             count += 1
@@ -1032,6 +1034,8 @@ class Runner:
             "timeout": timeout_count,
             "error": error_count,
             "pending_eval": pending_eval,
+            "skipped": skipped,
+            "run": count,
         }
 
     def summarize(self, agent: str) -> dict[str, Any]:
