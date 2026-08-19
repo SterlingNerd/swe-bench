@@ -395,8 +395,9 @@ def run_instance(
 
     return {
         "status": final_status,
-        "exit_code": 0,
+        "patch_bytes": patch_bytes,
         "elapsed_seconds": elapsed,
+        "agent_exit_code": agent_exit_code,
     }
 
 
