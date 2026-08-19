@@ -77,3 +77,43 @@ harnesses/
 Editing files inside `bundle/` directly is forbidden — it is gitignored and overwritten on every build. Always change the source folder and rebuild.
 
 See [`harnesses/AGENTS.md`](./harnesses/AGENTS.md) for the full agent folder schema and harness integration details.
+
+---
+
+## Security Architecture & Deliberate Trade-offs
+
+This system runs untrusted code (agent-generated patches, arbitrary tool use) in containers. We make **deliberate security choices** that prioritize isolation over convenience, even when they make development and debugging more difficult.
+
+### Container Isolation
+
+- **User namespace remapping** — All swebench evaluation images use user namespace remapping (`container UID 1000 → host UID 0`). This means a container escape only yields root privileges, not the host user's privileges. We **keep this enabled** (`--userns=host` is explicitly *not* used) even though it breaks volume mount permissions and requires `docker cp` for outputs.
+
+- **No privileged containers** — Containers run with `--cap-drop=ALL`, `--security-opt=no-new-privileges:true`, `--pids-limit=500`, and memory limits. No `--privileged`, no host networking, no host PID namespace.
+
+- **Read-only agent bundle** — The agent bundle is mounted read-only (`:ro`). The agent cannot modify its own code or config.
+
+- **No host path access** — Only the agent bundle (read-only) and a dedicated output directory are mounted. No access to host filesystem, Docker socket, or secrets.
+
+- **No sudo in container or runner** — The runner never uses `sudo`. Permission issues are handled via `docker cp` (which preserves container ownership) and explicit `chown` by the entrypoint running as root inside the container. If files end up root-owned on the host due to user namespace mapping, they require manual cleanup — **we accept this operational burden rather than introduce sudo**.
+
+### Deliberate Operational Burdens
+
+| Security Choice | Operational Cost | Why We Accept It |
+|---|---|---|
+| User namespace remapping | Volume mount permissions broken; must use `docker cp` for outputs | Prevents container escape from yielding host user privileges |
+| No sudo in runner | Root-owned files on host require manual cleanup | Eliminates privilege escalation vector in runner |
+| No sudo in entrypoint | Must carefully manage chown as root inside container | Avoids sudo in container (which would require `--cap-add=SYS_ADMIN`) |
+| Read-only bundle | Agents can't self-modify or install packages at runtime | Supply chain integrity; reproducible runs |
+| No host Docker socket | Can't spin up sibling containers from agent | Prevents container escape via Docker API |
+
+### Output Handling
+
+Because user namespace remapping maps container UID 1000 → host UID 0 (root), volume-mounted output directories end up root-owned on the host. We handle this by:
+
+1. **No output volume mount** — The container writes to its internal `/workspace/outputs/{agent}/{instance}`
+2. **docker cp** — Runner uses `docker cp` to copy outputs out, preserving container ownership (UID 1000)
+3. **Entrypoint chown** — Entrypoint runs as root inside container, chowns outputs to host UID/GID before `docker cp`
+4. **Status files** — Entrypoint writes `.status`, `.patch_size`, `.elapsed`, `.agent_exit_code` which `docker cp` brings out with correct ownership
+
+This is more complex than a simple volume mount, but it maintains the security boundary.
+

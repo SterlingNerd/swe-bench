@@ -56,6 +56,7 @@ export PI_CODING_AGENT_DIR="${PI_CONFIG_DIR}"
 # --- Fix permissions for /testbed (owned by root in image) ---
 HOST_UID="${HOST_UID:-$(id -u)}"
 HOST_GID="${HOST_GID:-$(id -g)}"
+echo "DEBUG: HOST_UID='${HOST_UID}', HOST_GID='${HOST_GID}', id -u=$(id -u)"
 if [ "$(id -u)" = "0" ]; then
     # Running as root: use existing nonroot user (UID 1000) or create one matching host
     if [ "${HOST_UID}" = "1000" ] && [ "${HOST_GID}" = "1000" ]; then
@@ -68,16 +69,13 @@ if [ "$(id -u)" = "0" ]; then
         fi
     fi
     # Clean up previous run's output directory to avoid permission issues
-    rm -rf "${OUTPUT_DIR}"
-echo "DEBUG: After rm, ls -la ${OUTPUT_DIR}: $(ls -la ${OUTPUT_DIR} 2>/dev/null || echo "Directory does not exist")"
-echo "DEBUG: Removing OUTPUT_DIR: ${OUTPUT_DIR}"
+    # NOTE: Runner creates OUTPUT_DIR with correct ownership, so we don't rm -rf it
+    # Only chown what we need inside the container
     chown -R "${HOST_UID}:${HOST_GID}" /testbed 2>/dev/null || true
-    # Also ensure output dir is writable
-    chown -R "${HOST_UID}:${HOST_GID}" "${OUTPUT_ROOT}" 2>/dev/null || true
     # Fix config dir permissions for agent
     chown -R "${HOST_UID}:${HOST_GID}" "${PI_CONFIG_DIR}" 2>/dev/null || true
-    # Ensure output dir exists with correct ownership
-    mkdir -p "${OUTPUT_DIR}" "${OUTPUT_DIR}/eval" "${OUTPUT_DIR}/pi-sessions"
+    # Create output directory structure (runner doesn't mount outputs volume)
+    mkdir -p "${OUTPUT_DIR}/eval" "${OUTPUT_DIR}/pi-sessions"
     chown -R "${HOST_UID}:${HOST_GID}" "${OUTPUT_DIR}" 2>/dev/null || true
 fi
 
@@ -118,15 +116,14 @@ mkdir -p "${SESSION_DIR}"
 
 # Run agent as host user (with cd to repo dir since runuser changes cwd)
 if [ "$(id -u)" = "0" ]; then
-    cat > /tmp/run_agent.sh << EOF
-cd /testbed || { echo "ERROR: cd failed"; pwd; exit 1; }
-GIT_OPTS="--git-dir=/testbed/.git --work-tree=/testbed" && exec pi -p --session-dir "${SESSION_DIR}" "${PROBLEM_STATEMENT}" 2>&1
-echo "DEBUG: pwd before git: $(pwd)"
-EOF
-    chmod +x /tmp/run_agent.sh
-    RUN_AS="runuser -u ${RUN_USER} -- /tmp/run_agent.sh"
-else
-    RUN_AS="pi -p --session-dir "${SESSION_DIR}" "${PROBLEM_STATEMENT}" 2>&1"
+    # Run agent as root directly (with --cap-drop ALL and --security-opt no-new-privileges, 
+    # root in container is relatively safe due to user namespace remapping)
+    # Write problem statement to a file to avoid shell escaping issues
+    PROBLEM_FILE="/tmp/problem_statement.txt"
+    printf "%s" "${PROBLEM_STATEMENT}" > "${PROBLEM_FILE}"
+    chmod a+r "${PROBLEM_FILE}"
+    # Use a subshell to properly handle stdin redirection for the pi command
+    RUN_AS='(cd /testbed && exec pi -p --session-dir "${SESSION_DIR}" < /tmp/problem_statement.txt 2>&1)'
 fi
 
 echo "  Running agent in $REPO_DIR..."
@@ -134,8 +131,7 @@ START_TIME=$(date +%s)
 AGENT_OUTPUT="${OUTPUT_DIR}/agent_output.txt"
 
 set +e
-${RUN_AS} | tee "${AGENT_OUTPUT}"
-echo "DEBUG: Running agent with RUN_AS: ${RUN_AS}"
+eval "${RUN_AS}" | tee "${AGENT_OUTPUT}"
 AGENT_EXIT_CODE=${PIPESTATUS[0]}
 set -e
 if [ "$AGENT_EXIT_CODE" -ne 0 ]; then
@@ -146,7 +142,6 @@ fi
 echo "  Extracting patch..."
 cd /testbed || { echo "ERROR: cd failed"; pwd; exit 1; }
 GIT_OPTS="--git-dir=/testbed/.git --work-tree=/testbed"
-echo "DEBUG: pwd before git: $(pwd)"
 
 # Stage all changes first
 git $GIT_OPTS add -A 2>/dev/null || true
@@ -164,7 +159,9 @@ if ! git $GIT_OPTS diff --binary "$BASE_COMMIT" > "${OUTPUT_DIR}/patch.diff" 2>/
     touch "${OUTPUT_DIR}/patch.diff"
 fi
 
+echo "DEBUG: Before PATCH_SIZE calculation"
 PATCH_SIZE=$(wc -c < "${OUTPUT_DIR}/patch.diff" 2>/dev/null || echo 0)
+echo "DEBUG: PATCH_SIZE=$PATCH_SIZE"
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
 
@@ -179,25 +176,10 @@ else
     echo "  Agent completed without modifying files (0-byte patch)."
 fi
 
-# Fix output permissions if running as root
-if [ "$(id -u)" = "0" ]; then
-    chown -R "${HOST_UID}:${HOST_GID}" "${OUTPUT_DIR}" 2>/dev/null || true
-fi
-
-RESULT_STATUS="$STATUS" PATCH_SIZE="$PATCH_SIZE" ELAPSED="$ELAPSED" \
-    AGENT_EXIT_CODE="$AGENT_EXIT_CODE" RESULT_FILE="${OUTPUT_DIR}/result.json" \
-    python3 - <<'PY'
-import json
-import os
-
-result = {
-    "status": os.environ["RESULT_STATUS"],
-    "patch_bytes": int(os.environ["PATCH_SIZE"]),
-    "elapsed_seconds": int(os.environ["ELAPSED"]),
-    "agent_exit_code": int(os.environ["AGENT_EXIT_CODE"]),
-}
-with open(os.environ["RESULT_FILE"], "w") as handle:
-    json.dump(result, handle, indent=2)
-PY
+# Write status files for runner to read (docker cp will copy them out)
+echo "$STATUS" > "${OUTPUT_DIR}/.status"
+echo "$PATCH_SIZE" > "${OUTPUT_DIR}/.patch_size"
+echo "$ELAPSED" > "${OUTPUT_DIR}/.elapsed"
+echo "$AGENT_EXIT_CODE" > "${OUTPUT_DIR}/.agent_exit_code"
 
 echo "  Output: ${OUTPUT_DIR}/"

@@ -151,6 +151,10 @@ def run_instance(
     agent_output_root.mkdir(parents=True, exist_ok=True)
     instance_output_dir = agent_output_root / instance_id
 
+    # Note: We do NOT create instance_output_dir here.
+    # The entrypoint script will create it inside the container with correct permissions.
+    # We will use docker cp to copy the results out after the container runs.
+
     container_name = f"swe_{agent}_{instance_id}"
 
     # Release any stale container from previous interrupted run
@@ -270,18 +274,55 @@ def run_instance(
         container_state = docker_ops.inspect_container_state(container_name)
         logger.info("Container state after run: %s", container_state or "unknown")
 
-        # Files are already on host via volume mount, no need for docker cp
-        # Just verify the instance output directory exists and has files
-        if instance_output_dir.exists() and any(instance_output_dir.iterdir()):
-            cp_ok = True
-        else:
-            logger.warning("No output files found in instance directory")
-            cp_ok = False
+        # Copy outputs from container using docker cp
+        cp_tmp = instance_output_dir.parent / f".tmp_{instance_id}"
+        cp_ok = False
 
-        # Clean up temp dir (not used but kept for compatibility)
-        if cp_tmp.exists():
-            import shutil
-            shutil.rmtree(cp_tmp, ignore_errors=True)
+        try:
+            container_state = docker_ops.inspect_container_state(container_name)
+            logger.info("Container state after run: %s", container_state or "unknown")
+
+            if docker_ops.copy_from_container(
+                container_name,
+                f"/workspace/outputs/{agent}/{instance_id}",
+                cp_tmp,
+            ):
+                # Ensure instance output dir exists
+                instance_output_dir.mkdir(parents=True, exist_ok=True)
+
+                # Flatten: docker cp nests the instance dir (single level).
+                nested = cp_tmp / instance_id
+                if nested.is_dir():
+                    for item in nested.iterdir():
+                        dest = instance_output_dir / item.name
+                        if dest.exists():
+                            import shutil
+                            if dest.is_dir():
+                                shutil.rmtree(dest)
+                            else:
+                                dest.unlink()
+                        item.rename(dest)
+                    cp_ok = True
+                else:
+                    # Copy directly if no nesting (files placed directly in cp_tmp)
+                    for item in cp_tmp.iterdir():
+                        dest = instance_output_dir / item.name
+                        if dest.exists():
+                            import shutil
+                            if dest.is_dir():
+                                shutil.rmtree(dest)
+                            else:
+                                dest.unlink()
+                        item.rename(dest)
+                    cp_ok = True
+
+            if not cp_ok:
+                logger.warning("Copy succeeded but no output files found")
+        finally:
+            # Clean up temp dir
+            if cp_tmp.exists():
+                import shutil
+                shutil.rmtree(cp_tmp, ignore_errors=True)
     finally:
         # Remove container after copying outputs
         docker_ops.remove_container(container_name)
@@ -301,35 +342,48 @@ def run_instance(
             "elapsed_seconds": elapsed,
         }
 
-    # Fix ownership recursively (container runs as root, host user needs access)
-    import os, stat
-    try:
-        for root, dirs, files in os.walk(str(instance_output_dir)):
-            for d in dirs:
-                os.chown(os.path.join(root, d), os.getuid(), os.getgid())
-            for f in files:
-                os.chown(os.path.join(root, f), os.getuid(), os.getgid())
-    except OSError:
-        pass
+    # Read status from entrypoint's status files (copied via docker cp)
+    status_file = instance_output_dir / ".status"
+    patch_size_file = instance_output_dir / ".patch_size"
+    elapsed_file = instance_output_dir / ".elapsed"
+    agent_exit_code_file = instance_output_dir / ".agent_exit_code"
 
-    # Check result.json for final status
+    final_status = "no_patch"
+    patch_bytes = 0
+    agent_exit_code = 0
+    if status_file.exists():
+        final_status = status_file.read_text().strip()
+    if patch_size_file.exists():
+        try:
+            patch_bytes = int(patch_size_file.read_text().strip())
+        except ValueError:
+            patch_bytes = 0
+    if elapsed_file.exists():
+        try:
+            elapsed = int(elapsed_file.read_text().strip())
+        except ValueError:
+            pass
+    if agent_exit_code_file.exists():
+        try:
+            agent_exit_code = int(agent_exit_code_file.read_text().strip())
+        except ValueError:
+            pass
+
+    # Determine final status based on patch size and agent exit code
+    if final_status == "patch_collected" and patch_bytes == 0:
+        final_status = "no_patch"
+    elif final_status == "patch_collected" and agent_exit_code != 0:
+        final_status = "agent_error"
+
+    # Write result.json for runner
     result_file = instance_output_dir / "result.json"
-    final_status = "patch_collected"
-    if result_file.exists():
-        try:
-            data = read_json(result_file)
-            final_status = data.get("status", "unknown")
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-    # Update elapsed in result.json
-    if result_file.exists():
-        try:
-            data = read_json(result_file)
-            data["elapsed_seconds"] = elapsed
-            write_json(result_file, data)
-        except (json.JSONDecodeError, ValueError):
-            pass
+    result_data = {
+        "status": final_status,
+        "patch_bytes": patch_bytes,
+        "elapsed_seconds": elapsed,
+        "agent_exit_code": agent_exit_code,
+    }
+    write_json(result_file, result_data)
 
     # Cleanup: remove the instance's Docker image to save disk space
     if cleanup_image:

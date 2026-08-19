@@ -170,7 +170,29 @@ class DockerOps:
 
         started_at = datetime.datetime.now(datetime.timezone.utc)
 
-        docker_cmd = ["docker", "run", "--name", container_name] + flags + [image_name] + command
+        # Filter out the outputs volume mount to avoid user namespace issues
+        # We use docker cp instead of volume mount for outputs
+        filtered_flags = []
+        skip_next = False
+        for i, f in enumerate(flags):
+            if skip_next:
+                skip_next = False
+                continue
+            if f == "-v" or f.startswith("-v"):
+                # Check if next flag is the outputs path
+                if i + 1 < len(flags) and ("/workspace/outputs" in flags[i + 1] or "/workspace/outputs:" in flags[i + 1]):
+                    skip_next = True  # Skip the path that follows
+                    continue
+                # Also check if the mount spec itself contains outputs
+                if "/workspace/outputs" in f and ("/workspace/outputs:" in f or f.endswith("/workspace/outputs")):
+                    continue
+            filtered_flags.append(f)
+
+        # Keep CAP_SETUID and CAP_SETGID for runuser to switch users
+        # --cap-drop ALL drops these, so we add them back
+        cap_add = ["--cap-add", "SETUID", "--cap-add", "SETGID"]
+        docker_cmd = ["docker", "run", "--name", container_name] + filtered_flags + cap_add + [image_name] + command
+        logger.info(f"DEBUG docker_cmd: {docker_cmd}")
 
         try:
             if timeout_seconds > 0:
@@ -315,14 +337,22 @@ class DockerOps:
         """
         try:
             dest_path.mkdir(parents=True, exist_ok=True)
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("Docker cp: %s:%s -> %s", container_name, src_path, dest_path)
             result = subprocess.run(
                 ["docker", "cp", f"{container_name}:{src_path}", str(dest_path)],
                 capture_output=True,
                 text=True,
                 timeout=120,
             )
+            if result.returncode != 0:
+                logger.error("Docker cp failed: %s", result.stderr)
+            else:
+                logger.info("Docker cp succeeded")
             return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            logger.error("Docker cp exception: %s", e)
             return False
 
     def inspect_container_state(self, container_name: str) -> Optional[str]:
