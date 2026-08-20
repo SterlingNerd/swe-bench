@@ -495,12 +495,27 @@ def _print_summary(summary: dict) -> None:
             f"{row['instance_id']:42s} {str(row['status']):12s} {str(row.get('local_eval', '')):12s} "
             f"{str(row.get('patch_bytes', 0) or 0):>8s} {str(row.get('elapsed_seconds', 0) or 0):>10s}"
         )
+    total = summary['total']
+    def pct(n: int) -> str:
+        return f"{(n * 100 / total):.1f}%" if total else "0.0%"
+    
+    # Main categories
     click.echo(
-        f"\nTotal: {summary['total']} | resolved: {summary['resolved']} "
-        f"| failed: {summary['failed']} | error: {summary['errored']} "
-        f"| no_patch: {summary['no_patch']} | timed_out: {summary['timed_out']} "
-        f"| agent_error: {summary['agent_errors']}"
+        f"\nTotal: {total} | resolved: {summary['resolved']} ({pct(summary['resolved'])}) "
+        f"| failed: {summary['failed']} ({pct(summary['failed'])}) | error: {summary['error']} ({pct(summary['error'])})"
     )
+    
+    # Failed breakdown
+    if summary.get('failed_breakdown'):
+        fb = summary['failed_breakdown']
+        fb_str = ' | '.join(f"{k}: {v} ({pct(v)})" for k, v in sorted(fb.items()))
+        click.echo(f"  Failed breakdown: {fb_str}")
+    
+    # Error breakdown
+    if summary.get('error_breakdown'):
+        eb = summary['error_breakdown']
+        eb_str = ' | '.join(f"{k}: {v} ({pct(v)})" for k, v in sorted(eb.items()))
+        click.echo(f"  Error breakdown: {eb_str}")
 
 
 @main.command()
@@ -520,62 +535,45 @@ def status(ctx: click.Context, agent: str | None) -> None:
             click.echo(f"No outputs found for agent '{agent}'.")
             return
 
-        total = 0
-        resolved = 0
-        failed = 0
-        no_patch = 0
-        timed_out = 0
-        errors = 0
-        unknown = 0
-
-        for instance_dir in sorted(output_dir.iterdir()):
-            if not instance_dir.is_dir() or instance_dir.name in ("eval", "logs"):
-                continue
-
-            total += 1
-            result_file = instance_dir / "result.json"
-
-            if result_file.exists():
-                from swebench_orchestrator.models import read_json
-                try:
-                    meta = read_json(result_file)
-                    status = meta.get("status", "unknown")
-                except Exception:
-                    status = "unknown"
-            else:
-                status = "unknown"
-
+        summary = summarize_results(output_dir, agent=agent)
+        
+        # Print per-instance status with icons
+        for row in summary["rows"]:
+            status = row["status"]
+            iid = row["instance_id"]
             if status == "resolved":
-                resolved += 1
                 click.echo(click.style("✓", fg="green"), nl=False)
-                click.echo(f" {instance_dir.name} ({status})")
-            elif status == "failed":
-                failed += 1
-                click.echo(click.style("✗", fg="red"), nl=False)
-                click.echo(f" {instance_dir.name} ({status})")
-            elif status == "no_patch":
-                no_patch += 1
-                click.echo(click.style("—", fg="yellow"), nl=False)
-                click.echo(f" {instance_dir.name} (agent completed, no files modified)")
-            elif status == "timed_out":
-                timed_out += 1
-                click.echo(click.style("⌛", fg="yellow"), nl=False)
-                click.echo(f" {instance_dir.name} (timed out)")
-            elif status in ("error", "agent_error", "container_error"):
-                errors += 1
+                click.echo(f" {iid} ({status})")
+            elif status in ("failed", "no_patch", "timed_out", "pending_eval"):
+                click.echo(click.style("✗", fg="yellow"), nl=False)
+                click.echo(f" {iid} ({status})")
+            elif status in ("error", "agent_error", "container_error", "copy_failed", "eval_error"):
                 click.echo(click.style("!", fg="red"), nl=False)
-                click.echo(f" {instance_dir.name} ({status})")
+                click.echo(f" {iid} ({status})")
             else:
-                unknown += 1
                 click.echo(click.style("?", fg="white"), nl=False)
-                click.echo(f" {instance_dir.name} ({status})")
+                click.echo(f" {iid} ({status})")
 
         click.echo()
+        total = summary['total']
+        def pct(n: int) -> str:
+            return f"{(n * 100 / total):.1f}%" if total else "0.0%"
         click.echo(
-            f"Total: {total} | Resolved: {resolved} | Failed: {failed} "
-            f"| No patch: {no_patch} | Timed out: {timed_out} "
-            f"| Errors: {errors} | Unknown: {unknown}"
+            f"Total: {total} | Resolved: {summary['resolved']} ({pct(summary['resolved'])}) "
+            f"| Failed: {summary['failed']} ({pct(summary['failed'])}) | Error: {summary['error']} ({pct(summary['error'])})"
         )
+        
+        # Failed breakdown
+        if summary.get('failed_breakdown'):
+            fb = summary['failed_breakdown']
+            fb_str = ' | '.join(f"{k}: {v} ({pct(v)})" for k, v in sorted(fb.items()))
+            click.echo(f"  Failed: {fb_str}")
+        
+        # Error breakdown
+        if summary.get('error_breakdown'):
+            eb = summary['error_breakdown']
+            eb_str = ' | '.join(f"{k}: {v} ({pct(v)})" for k, v in sorted(eb.items()))
+            click.echo(f"  Error: {eb_str}")
     else:
         # Show all agents
         if not config.output_dir.is_dir():
@@ -584,14 +582,23 @@ def status(ctx: click.Context, agent: str | None) -> None:
 
         for agent_dir in sorted(config.output_dir.iterdir()):
             if agent_dir.is_dir() and agent_dir.name not in ("eval", "logs"):
-                # Reuse the logic above for each agent
                 summary = summarize_results(agent_dir, agent=agent_dir.name)
                 click.echo(f"Agent: {summary['agent']}")
+                total = summary['total']
+                def pct(n: int) -> str:
+                    return f"{(n * 100 / total):.1f}%" if total else "0.0%"
                 click.echo(
-                    f"Total: {summary['total']} | Resolved: {summary['resolved']} "
-                    f"| Failed: {summary['failed']} | No patch: {summary['no_patch']} "
-                    f"| Timed out: {summary['timed_out']} | Errors: {summary['agent_errors']}"
+                    f"Total: {total} | Resolved: {summary['resolved']} ({pct(summary['resolved'])}) "
+                    f"| Failed: {summary['failed']} ({pct(summary['failed'])}) | Error: {summary['error']} ({pct(summary['error'])})"
                 )
+                if summary.get('failed_breakdown'):
+                    fb = summary['failed_breakdown']
+                    fb_str = ' | '.join(f"{k}: {v} ({pct(v)})" for k, v in sorted(fb.items()))
+                    click.echo(f"  Failed: {fb_str}")
+                if summary.get('error_breakdown'):
+                    eb = summary['error_breakdown']
+                    eb_str = ' | '.join(f"{k}: {v} ({pct(v)})" for k, v in sorted(eb.items()))
+                    click.echo(f"  Error: {eb_str}")
                 click.echo()
 
 

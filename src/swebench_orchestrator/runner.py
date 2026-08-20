@@ -445,6 +445,11 @@ def summarize_results(output_dir: Path, agent: Optional[str] = None) -> dict[str
 
     Returns:
         Summary dict with counts and per-instance rows.
+        
+    Status grouping:
+    - resolved: local_eval == "resolved" (eval passed)
+    - failed (valid results): eval failed, no_patch, timed_out, pending_eval
+    - error (should re-run): eval error, agent_error, container_error, copy_failed
     """
     if agent is None:
         agent = output_dir.parent.name
@@ -456,10 +461,9 @@ def summarize_results(output_dir: Path, agent: Optional[str] = None) -> dict[str
             "total": 0,
             "resolved": 0,
             "failed": 0,
-            "errored": 0,
-            "no_patch": 0,
-            "timed_out": 0,
-            "agent_errors": 0,
+            "failed_breakdown": {},
+            "error": 0,
+            "error_breakdown": {},
             "rows": [],
         }
 
@@ -481,38 +485,69 @@ def summarize_results(output_dir: Path, agent: Optional[str] = None) -> dict[str
         except (json.JSONDecodeError, ValueError):
             continue
 
+        # Determine final status: eval overrides work
+        local_eval = _normalize_local_eval(meta.get("local_eval"))
+        work_status = meta.get("status", "unknown")
+        
+        if local_eval:
+            final_status = local_eval  # eval result takes precedence
+        else:
+            final_status = work_status  # fall back to work status
+
         rows.append({
             "instance_id": iid,
-            "status": meta.get("status"),
+            "status": final_status,
+            "work_status": work_status,
+            "local_eval": local_eval,
             "patch_bytes": meta.get("patch_bytes", 0),
             "elapsed_seconds": meta.get("elapsed_seconds", 0),
-            "local_eval": meta.get("local_eval"),
         })
 
     total = len(rows)
-    # Normalize local_eval for both string and legacy dict formats
-    normalized = [_normalize_local_eval(r.get("local_eval")) for r in rows]
-    resolved = sum(1 for v in normalized if v == "resolved")
-    failed = sum(1 for v in normalized if v == "failed")
-    errored = sum(1 for v in normalized if v == "error")
-    no_patch = sum(1 for r in rows if r["status"] == "no_patch")
-    timed_out = sum(1 for r in rows if r["status"] == "timed_out")
-    patch_collected = sum(1 for r in rows if r["status"] == "patch_collected")
-    agent_errors = sum(
-        1 for r in rows
-        if r["status"] in ("agent_error", "container_error")
-    )
+    
+    # Count categories
+    resolved = sum(1 for r in rows if r["status"] == "resolved")
+    
+    # Failed: valid results that didn't resolve
+    failed_categories = []
+    for r in rows:
+        if r["status"] == "failed":
+            failed_categories.append("eval_failed")
+        elif r["status"] == "no_patch":
+            failed_categories.append("no_patch")
+        elif r["status"] == "timed_out":
+            failed_categories.append("timed_out")
+        elif r["status"] == "patch_collected":
+            # Work completed but no eval yet
+            failed_categories.append("pending_eval")
+    failed = len(failed_categories)
+    
+    # Error: instances that should be re-run
+    error_categories = []
+    for r in rows:
+        if r["status"] == "error":
+            error_categories.append("eval_error")
+        elif r["status"] == "agent_error":
+            error_categories.append("agent_error")
+        elif r["status"] == "container_error":
+            error_categories.append("container_error")
+        elif r["status"] == "copy_failed":
+            error_categories.append("copy_failed")
+    error = len(error_categories)
+    
+    # Build breakdowns
+    from collections import Counter
+    failed_breakdown = dict(Counter(failed_categories))
+    error_breakdown = dict(Counter(error_categories))
 
     return {
         "agent": agent,
         "total": total,
         "resolved": resolved,
         "failed": failed,
-        "errored": errored,
-        "no_patch": no_patch,
-        "timed_out": timed_out,
-        "patch_collected": patch_collected,
-        "agent_errors": agent_errors,
+        "failed_breakdown": failed_breakdown,
+        "error": error,
+        "error_breakdown": error_breakdown,
         "rows": rows,
     }
 
@@ -904,7 +939,15 @@ class Runner:
             resume: Skip instances that already have results.
 
         Returns:
-            Dict with run statistics (total, resolved, no_answer, timeout, error).
+            Dict with live run statistics:
+            - total: total instances in dataset
+            - resolved: instances where eval passed
+            - no_answer: instances where eval failed (valid result)
+            - timeout: instances where work timed out
+            - error: instances with work/eval errors (should re-run)
+            - pending_eval: instances with patch but eval not run
+            - skipped: instances skipped due to --resume
+            - run: instances actually run in this invocation
         """
         # Safety net: wait for any stale containers from interrupted runs
         logger.info("Waiting for any running %s containers to finish...", agent)
