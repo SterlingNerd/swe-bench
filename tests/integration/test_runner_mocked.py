@@ -98,6 +98,10 @@ class MockDockerOps(DockerOps):
             '{"status": "patch_collected", "patch_bytes": 42, "elapsed_seconds": 5}'
         )
         (nested_dir / "patch.diff").write_text("diff --git a test b/test\n+hello")
+        (nested_dir / ".patch_size").write_text("42")
+        (nested_dir / ".elapsed").write_text("5")
+        (nested_dir / ".agent_exit_code").write_text("0")
+        (nested_dir / ".status").write_text("patch_collected")
         return True
 
     def inspect_container_state(self, container_name):
@@ -137,7 +141,7 @@ class TestRunInstanceSuccess:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -149,7 +153,7 @@ class TestRunInstanceSuccess:
         assert result["exit_code"] == 0
 
         # Verify result.json was written
-        result_file = output_dir / "test-agent" / "django__django-11039" / "result.json"
+        result_file = output_dir / "pi" / "django__django-11039" / "result.json"
         assert result_file.exists()
         import json
         data = json.loads(result_file.read_text())
@@ -162,7 +166,7 @@ class TestRunInstanceSuccess:
 
         run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -170,7 +174,7 @@ class TestRunInstanceSuccess:
             docker_ops=docker_ops,
         )
 
-        patch_file = output_dir / "test-agent" / "django__django-11039" / "patch.diff"
+        patch_file = output_dir / "pi" / "django__django-11039" / "patch.diff"
         assert patch_file.exists()
         assert len(patch_file.read_text()) > 0
 
@@ -185,7 +189,7 @@ class TestRunInstanceTimeout:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -197,7 +201,7 @@ class TestRunInstanceTimeout:
         assert result["exit_code"] == 124
 
         # Verify result.json
-        result_file = output_dir / "test-agent" / "django__django-11039" / "result.json"
+        result_file = output_dir / "pi" / "django__django-11039" / "result.json"
         assert result_file.exists()
         import json
         data = json.loads(result_file.read_text())
@@ -214,7 +218,7 @@ class TestRunInstanceError:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -236,7 +240,7 @@ class TestRunInstanceOOM:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -258,7 +262,7 @@ class TestRunInstanceCopyFailure:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -317,7 +321,7 @@ class TestRunInstanceValidation:
         with pytest.raises(ValueError, match="not found"):
             run_instance(
                 agents_dir=test_workspace / "harnesses",
-                agent="test-agent",
+                agent="pi",
                 instance_id="nonexistent__instance-999",
                 output_dir=output_dir,
                 timeout=3600,
@@ -336,7 +340,7 @@ class TestRunInstanceElapsedTime:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -348,7 +352,7 @@ class TestRunInstanceElapsedTime:
         assert "elapsed_seconds" in result
 
         # Verify in result.json
-        result_file = output_dir / "test-agent" / "django__django-11039" / "result.json"
+        result_file = output_dir / "pi" / "django__django-11039" / "result.json"
         import json
         data = json.loads(result_file.read_text())
         assert "elapsed_seconds" in data
@@ -364,7 +368,7 @@ class TestRunInstanceReturnCodes:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -383,7 +387,7 @@ class TestRunInstanceReturnCodes:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -401,7 +405,7 @@ class TestRunInstanceReturnCodes:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -423,7 +427,7 @@ class TestRunInstanceImagePull:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -443,7 +447,7 @@ class TestRunInstanceImagePull:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -489,7 +493,7 @@ class TestRunInstanceNestedCopy:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -499,7 +503,7 @@ class TestRunInstanceNestedCopy:
 
         assert result["status"] == "patch_collected"
         # Verify files are at the right level (not nested)
-        result_file = output_dir / "test-agent" / "django__django-11039" / "result.json"
+        result_file = output_dir / "pi" / "django__django-11039" / "result.json"
         assert result_file.exists()
         import json
         data = json.loads(result_file.read_text())
@@ -512,7 +516,7 @@ class TestRunInstanceNestedCopy:
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -521,7 +525,7 @@ class TestRunInstanceNestedCopy:
         )
 
         assert result["status"] == "patch_collected"
-        result_file = output_dir / "test-agent" / "django__django-11039" / "result.json"
+        result_file = output_dir / "pi" / "django__django-11039" / "result.json"
         assert result_file.exists()
 
 
@@ -536,7 +540,7 @@ class TestRunInstanceEdgeCases:
         with patch("os.chown", side_effect=OSError("Permission denied")):
             result = run_instance(
                 agents_dir=test_workspace / "harnesses",
-                agent="test-agent",
+                agent="pi",
                 instance_id="django__django-11039",
                 output_dir=output_dir,
                 timeout=3600,
@@ -557,7 +561,7 @@ class TestRunInstanceEdgeCases:
             with patch("swebench_orchestrator.runner.logger") as mock_logger:
                 result = run_instance(
                     agents_dir=test_workspace / "harnesses",
-                    agent="test-agent",
+                    agent="pi",
                     instance_id="django__django-11039",
                     output_dir=output_dir,
                     timeout=3600,
@@ -583,13 +587,14 @@ class TestRunInstanceEdgeCases:
             (dest_path / "result.json").write_text(
                 '{"status": "resolved", "patch_bytes": 42}'
             )
+            (dest_path / ".status").write_text("resolved")
             return True
 
         docker_ops.copy_from_container = custom_copy
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,
@@ -611,13 +616,18 @@ class TestRunInstanceEdgeCases:
             instance_dir = dest_path / instance_id
             instance_dir.mkdir(exist_ok=True)
             (instance_dir / "result.json").write_text("not valid json")
+            (instance_dir / ".status").write_text("patch_collected")
+            (instance_dir / ".patch_size").write_text("42")
+            (instance_dir / ".elapsed").write_text("5")
+            (instance_dir / ".agent_exit_code").write_text("0")
+            (instance_dir / "patch.diff").write_text("diff --git a test b/test\n+hello")
             return True
 
         docker_ops.copy_from_container = custom_copy
 
         result = run_instance(
             agents_dir=test_workspace / "harnesses",
-            agent="test-agent",
+            agent="pi",
             instance_id="django__django-11039",
             output_dir=output_dir,
             timeout=3600,

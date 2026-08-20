@@ -25,7 +25,7 @@ def mock_agent(test_workspace: Path) -> Path:
 
     Returns path to the agent directory.
     """
-    agent_dir = test_workspace / "harnesses" / "test-agent"
+    agent_dir = test_workspace / "harnesses" / "pi"
     bundle_dir = agent_dir / "bundle"
     bundle_dir.mkdir(parents=True)
 
