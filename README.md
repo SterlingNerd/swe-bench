@@ -28,6 +28,60 @@ The orchestrator mounts the selected bundle read-only at `/agent` in the officia
 per-instance SWE-bench image. The image's repository is already checked out at
 `/testbed`; the agent edits it and the entrypoint extracts a staged binary diff.
 
+## Data Flow
+
+```text
+INSTANCE SELECTION → CONTAINER RUN → ENTRYPOINT.SH → DOCKER CP → RUNNER POST-PROCESS → EVAL → FOLD → SUMMARIZE
+     (CLI)             (Docker)          (in container)          (runner.py)        (run_eval)   (fold)   (CLI --summarize/--status)
+        │                  │                  │                      │                 │         │             │
+        ▼                  ▼                  ▼                      ▼                 ▼         ▼             ▼
+  Choose          Pull swebench       Setup writable           Copy outputs         Read .status,  Generate   Fold harness   Scan outputs/<agent>/
+  instance ID     image, mount        config, run agent,       from container,      .patch_size,   predictions.jsonl,  results into
+  (--run/--       bundle, outputs     extract patch,           read status files    .elapsed,      run swebench    each instance's
+  run-all)        dir                write status files       (docker cp)          .agent_exit_code  harness      result.json
+        │                  │                  │                      │                 │         │             │
+        ▼                  ▼                  ▼                      ▼                 ▼         ▼             ▼
+  Instance      Container          Creates per-instance      Runner writes        Final status   Report has    Updates result.json:
+  data from     runs with          files:                    result.json          (resolved/     resolved_ids,   - local_eval: resolved/failed/error
+  cache                              - patch.diff            with work status     failed/error)  unresolved_ids,  - status: resolved/failed/error
+                                   - meta.json                                                                     error_ids (overwrites work status)
+                                   - agent_output.txt
+                                   - .status (patch_collected/
+                                     no_patch/agent_error)
+                                   - .patch_size, .elapsed,
+                                     .agent_exit_code
+```
+
+### Final Status per Instance
+
+Each instance has **one final status** (eval overrides work):
+
+| Category | Final Status | Meaning | Should Re-run? |
+|----------|--------------|---------|----------------|
+| **Resolved** | `resolved` | Eval passed | No |
+| **Failed** (valid result) | `failed` | Eval ran, didn't resolve | No |
+| | `no_patch` | Agent completed, no files modified | No |
+| | `timed_out` | Work phase timed out | Maybe |
+| | `pending_eval` | Patch generated, eval not run yet | N/A |
+| **Error** (should re-run) | `error` | Eval errored | Yes |
+| | `agent_error` | Agent crashed (non-zero exit) | Yes |
+| | `container_error` | Container failed | Yes |
+| | `copy_failed` | docker cp failed | Yes |
+
+### Summary Output (`--summarize` / `--status`)
+
+```
+Agent: pi
+instance_id                                 status       local_eval   patch_B  elapsed_s
+django__django-11039                        resolved     resolved        1234        45
+flask__flask-1000                           failed       failed           567        32
+...
+
+Total: 500 | resolved: 237 (47.4%) | failed: 154 (30.8%) | error: 7 (1.4%)
+  Failed: eval_failed: 100 (20.0%) | no_patch: 31 (6.2%) | timed_out: 18 (3.6%) | pending_eval: 5 (1.0%)
+  Error: eval_error: 4 (0.8%) | agent_error: 2 (0.4%) | container_error: 1 (0.2%)
+```
+
 ## Prerequisites
 
 - Docker Desktop using the WSL 2 engine, with this Ubuntu distribution enabled
@@ -123,7 +177,7 @@ Each phase completes before the next instance starts, so disk usage stays bounde
 ./run.sh summarize pi
 ```
 
-Status symbols: ✓ resolved, ✗ failed, — no patch (agent completed without modifying files), ⌛ timed out, ! error, ? unknown.
+Status symbols: ✓ resolved | ✗ failed (eval failed / no_patch / timed_out / pending_eval) | ! error (eval_error / agent_error / container_error / copy_failed) | ? unknown
 
 ### Batch eval (legacy)
 
@@ -155,15 +209,22 @@ workspace/outputs/<agent>/<instance_id>/
 ├── pi-sessions/              # Pi session state (Pi only)
 ├── patch.diff                # Binary-safe staged diff, including new files
 ├── result.json               # Run status, timings, exit codes, evaluation
+├── .status                   # Work status: patch_collected/no_patch/agent_error
+├── .patch_size               # Patch size in bytes
+├── .elapsed                  # Work elapsed seconds
+├── .agent_exit_code          # Agent process exit code
 └── eval/                     # Per-instance evaluation artifacts
 ```
 
-Possible pre-evaluation statuses include `patch_collected`, `no_patch`,
-`agent_error`, `container_error`, and `timed_out`. `no_patch` means the agent
-ran to completion (exit code 0) but did not modify any files in the repository —
-it is a legitimate result, not an error. `--eval` adds `local_eval` and promotes
-the status to `resolved`, `failed`, or `error` while preserving the original
-agent metadata.
+Each instance has **one final status** in `result.json`:
+
+| Category | Final `status` values | Meaning | Should Re-run? |
+|----------|----------------------|---------|----------------|
+| **Resolved** | `resolved` | Eval passed | No |
+| **Failed** (valid result) | `failed`, `no_patch`, `timed_out`, `pending_eval` | Work completed but didn't resolve | No |
+| **Error** (should re-run) | `error`, `agent_error`, `container_error`, `copy_failed` | Infrastructure/agent failure | Yes |
+
+`no_patch` means the agent ran to completion (exit code 0) but did not modify any files — it is a legitimate result, not an error. `--eval` adds `local_eval` and sets the final `status` to `resolved`, `failed`, or `error` (eval overrides work status).
 
 Aggregate files such as `predictions.jsonl`, `summary.json`, and evaluator
 reports stay inside `workspace/outputs/<agent>/`. This prevents a Pi run from

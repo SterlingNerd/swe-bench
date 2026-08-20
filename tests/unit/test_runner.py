@@ -178,6 +178,163 @@ class TestSummarizeResults:
         summary = summarize_results(tmp_path / "outputs" / "pi", agent="pi")
         assert summary["agent"] == "pi"
         assert summary["total"] == 0
+        assert summary["resolved"] == 0
+        assert summary["failed"] == 0
+        assert summary["failed_breakdown"] == {}
+        assert summary["error"] == 0
+        assert summary["error_breakdown"] == {}
+
+    def test_final_status_uses_eval_when_present(self, tmp_path: Path):
+        """If local_eval exists, it overrides work status."""
+        output_dir = tmp_path / "outputs" / "pi"
+        instance_dir = output_dir / "django__django-11039"
+        instance_dir.mkdir(parents=True)
+        # Work status was patch_collected, but eval says failed
+        (instance_dir / "result.json").write_text(
+            '{"status": "patch_collected", "local_eval": "failed", "patch_bytes": 100, "elapsed_seconds": 120}'
+        )
+
+        summary = summarize_results(output_dir, agent="pi")
+        assert summary["total"] == 1
+        assert summary["resolved"] == 0
+        assert summary["failed"] == 1  # Counted as failed (eval failed)
+        assert summary["error"] == 0
+        # The row should show final status as failed (from local_eval)
+        assert summary["rows"][0]["status"] == "failed"
+
+    def test_final_status_uses_work_when_no_eval(self, tmp_path: Path):
+        """If no local_eval, use work status."""
+        output_dir = tmp_path / "outputs" / "pi"
+        for iid, status in [
+            ("django__django-11039", "no_patch"),
+            ("flask__flask-1000", "timed_out"),
+            ("requests__requests-1234", "agent_error"),
+        ]:
+            instance_dir = output_dir / iid
+            instance_dir.mkdir(parents=True)
+            (instance_dir / "result.json").write_text(
+                f'{{"status": "{status}", "patch_bytes": 0, "elapsed_seconds": 0}}'
+            )
+
+        summary = summarize_results(output_dir, agent="pi")
+        assert summary["total"] == 3
+        assert summary["resolved"] == 0
+        assert summary["failed"] == 2  # no_patch + timed_out
+        assert summary["error"] == 1   # agent_error
+        assert summary["failed_breakdown"] == {"no_patch": 1, "timed_out": 1}
+        assert summary["error_breakdown"] == {"agent_error": 1}
+
+    def test_resolved_from_local_eval(self, tmp_path: Path):
+        """Instances with local_eval=resolved are resolved."""
+        output_dir = tmp_path / "outputs" / "pi"
+        instance_dir = output_dir / "django__django-11039"
+        instance_dir.mkdir(parents=True)
+        (instance_dir / "result.json").write_text(
+            '{"status": "patch_collected", "local_eval": "resolved", "patch_bytes": 100, "elapsed_seconds": 120}'
+        )
+
+        summary = summarize_results(output_dir, agent="pi")
+        assert summary["total"] == 1
+        assert summary["resolved"] == 1
+        assert summary["failed"] == 0
+        assert summary["error"] == 0
+        assert summary["rows"][0]["status"] == "resolved"
+
+    def test_failed_group_includes_eval_failed_no_patch_timed_out_pending(self, tmp_path: Path):
+        """Failed group: eval failed, no_patch, timed_out, patch_collected (no eval yet)."""
+        output_dir = tmp_path / "outputs" / "pi"
+        for iid, status, local_eval in [
+            ("django__django-11039", "patch_collected", "failed"),      # eval failed
+            ("flask__flask-1000", "no_patch", None),                       # no patch
+            ("requests__requests-1234", "timed_out", None),               # timed out
+            ("pandas__pandas-5678", "patch_collected", None),             # pending eval
+        ]:
+            instance_dir = output_dir / iid
+            instance_dir.mkdir(parents=True)
+            data = {"status": status, "patch_bytes": 0, "elapsed_seconds": 0}
+            if local_eval:
+                data["local_eval"] = local_eval
+            (instance_dir / "result.json").write_text(json.dumps(data))
+
+        summary = summarize_results(output_dir, agent="pi")
+        assert summary["total"] == 4
+        assert summary["resolved"] == 0
+        assert summary["failed"] == 4
+        assert summary["error"] == 0
+        assert summary["failed_breakdown"] == {
+            "eval_failed": 1,
+            "no_patch": 1,
+            "timed_out": 1,
+            "pending_eval": 1,
+        }
+
+    def test_error_group_includes_eval_error_agent_error_container_error(self, tmp_path: Path):
+        """Error group: eval error, agent_error, container_error, copy_failed."""
+        output_dir = tmp_path / "outputs" / "pi"
+        for iid, status, local_eval in [
+            ("django__django-11039", "patch_collected", "error"),      # eval error
+            ("flask__flask-1000", "agent_error", None),                  # agent crashed
+            ("requests__requests-1234", "container_error", None),        # container failed
+            ("pandas__pandas-5678", "copy_failed", None),                # docker cp failed
+        ]:
+            instance_dir = output_dir / iid
+            instance_dir.mkdir(parents=True)
+            data = {"status": status, "patch_bytes": 0, "elapsed_seconds": 0}
+            if local_eval:
+                data["local_eval"] = local_eval
+            (instance_dir / "result.json").write_text(json.dumps(data))
+
+        summary = summarize_results(output_dir, agent="pi")
+        assert summary["total"] == 4
+        assert summary["resolved"] == 0
+        assert summary["failed"] == 0
+        assert summary["error"] == 4
+        assert summary["error_breakdown"] == {
+            "eval_error": 1,
+            "agent_error": 1,
+            "container_error": 1,
+            "copy_failed": 1,
+        }
+
+    def test_mixed_all_categories(self, tmp_path: Path):
+        """Test all categories together."""
+        output_dir = tmp_path / "outputs" / "pi"
+        test_cases = [
+            ("i1", "patch_collected", "resolved"),    # resolved
+            ("i2", "patch_collected", "failed"),       # failed: eval failed
+            ("i3", "patch_collected", "error"),         # error: eval error
+            ("i4", "no_patch", None),                     # failed: no patch
+            ("i5", "timed_out", None),                    # failed: timeout
+            ("i6", "patch_collected", None),              # failed: pending eval
+            ("i7", "agent_error", None),                  # error: agent error
+            ("i8", "container_error", None),              # error: container error
+            ("i9", "copy_failed", None),                  # error: copy failed
+        ]
+        for iid, status, local_eval in test_cases:
+            instance_dir = output_dir / iid
+            instance_dir.mkdir(parents=True)
+            data = {"status": status, "patch_bytes": 0, "elapsed_seconds": 0}
+            if local_eval:
+                data["local_eval"] = local_eval
+            (instance_dir / "result.json").write_text(json.dumps(data))
+
+        summary = summarize_results(output_dir, agent="pi")
+        assert summary["total"] == 9
+        assert summary["resolved"] == 1
+        assert summary["failed"] == 4  # eval_failed + no_patch + timed_out + pending_eval
+        assert summary["error"] == 4  # eval_error + agent_error + container_error + copy_failed
+        assert summary["failed_breakdown"] == {
+            "eval_failed": 1,
+            "no_patch": 1,
+            "timed_out": 1,
+            "pending_eval": 1,
+        }
+        assert summary["error_breakdown"] == {
+            "eval_error": 1,
+            "agent_error": 1,
+            "container_error": 1,
+            "copy_failed": 1,
+        }
 
     def test_single_instance(self, tmp_path: Path):
         output_dir = tmp_path / "outputs" / "pi"
@@ -190,6 +347,8 @@ class TestSummarizeResults:
         summary = summarize_results(output_dir, agent="pi")
         assert summary["agent"] == "pi"
         assert summary["total"] == 1
+        assert summary["failed"] == 1  # patch_collected with no eval = pending_eval
+        assert summary["failed_breakdown"] == {"pending_eval": 1}
         assert len(summary["rows"]) == 1
 
     def test_multiple_statuses(self, tmp_path: Path):
@@ -216,8 +375,10 @@ class TestSummarizeResults:
         summary = summarize_results(output_dir, agent="pi")
         assert summary["total"] == 3
         assert summary["resolved"] == 1
-        assert summary["failed"] == 1
-        assert summary["timed_out"] == 1
+        assert summary["failed"] == 2  # eval_failed + timed_out
+        assert summary["failed_breakdown"] == {"eval_failed": 1, "timed_out": 1}
+        assert summary["error"] == 0
+        assert "timed_out" not in summary  # Old key removed
 
     def test_skips_eval_and_logs_dirs(self, tmp_path: Path):
         output_dir = tmp_path / "outputs" / "pi"
