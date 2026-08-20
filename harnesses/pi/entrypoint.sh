@@ -141,6 +141,19 @@ fi
 # Extract patch via git diff (from inside the repo)
 echo "  Extracting patch..."
 cd /testbed || { echo "ERROR: cd failed"; pwd; exit 1; }
+
+# Initialize git repo if .git doesn't exist (some eval images lack it)
+if [ ! -d /testbed/.git ]; then
+    echo "  Initializing git repository in /testbed..."
+    git init -q
+    git config user.name "swe-agent"
+    git config user.email "swe-agent@swebench"
+    git add -A
+    git commit -q -m "Base commit ${BASE_COMMIT}" 2>/dev/null || true
+    # Tag the base commit for diffing
+    git tag -f base-commit
+fi
+
 GIT_OPTS="--git-dir=/testbed/.git --work-tree=/testbed"
 
 # Stage all changes first
@@ -154,13 +167,33 @@ if ! git $GIT_OPTS diff --quiet; then
 fi
 
 # Diff from base commit to current HEAD (includes agent commit if made)
-if ! git $GIT_OPTS diff --binary "$BASE_COMMIT" > "${OUTPUT_DIR}/patch.diff" 2>/dev/null; then
-    echo "  WARNING: git diff failed"
-    touch "${OUTPUT_DIR}/patch.diff"
+GIT_DIFF_OUTPUT="${OUTPUT_DIR}/patch.diff"
+GIT_DIFF_FAILED=0
+# Use base-commit tag if we initialized the repo, else use BASE_COMMIT
+if [ -f /testbed/.git/refs/tags/base-commit ]; then
+    DIFF_BASE="base-commit"
+else
+    DIFF_BASE="$BASE_COMMIT"
+fi
+if ! git $GIT_OPTS diff --binary "$DIFF_BASE" > "${GIT_DIFF_OUTPUT}" 2>&1; then
+    echo "  ERROR: git diff failed (exit code $?)"
+    touch "${GIT_DIFF_OUTPUT}"
+    GIT_DIFF_FAILED=1
 fi
 
+# Detect invalid diff output (e.g., git help text when not in a git repo)
+if [ -s "${GIT_DIFF_OUTPUT}" ]; then
+    # Check if output looks like a valid diff (starts with diff --git or similar)
+    first_line=$(head -n1 "${GIT_DIFF_OUTPUT}" 2>/dev/null || echo "")
+    if [[ ! "${first_line}" =~ ^diff\ --git|^---|^\+\+\+|^@@ ]]; then
+        echo "  ERROR: git diff produced invalid output (not a diff)"
+        echo "  First line: ${first_line}"
+        touch "${GIT_DIFF_OUTPUT}"  # truncate to empty
+        GIT_DIFF_FAILED=1
+    fi
+fi
 echo "DEBUG: Before PATCH_SIZE calculation"
-PATCH_SIZE=$(wc -c < "${OUTPUT_DIR}/patch.diff" 2>/dev/null || echo 0)
+PATCH_SIZE=$(wc -c < "${GIT_DIFF_OUTPUT}" 2>/dev/null || echo 0)
 echo "DEBUG: PATCH_SIZE=$PATCH_SIZE"
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
@@ -168,6 +201,9 @@ ELAPSED=$((END_TIME - START_TIME))
 if [ "$PATCH_SIZE" -gt 0 ]; then
     STATUS="patch_collected"
     echo "  Patch collected (${PATCH_SIZE} bytes)."
+elif [ "$GIT_DIFF_FAILED" -eq 1 ]; then
+    STATUS="agent_error"
+    echo "  ERROR: Failed to extract patch via git diff."
 elif [ "$AGENT_EXIT_CODE" -ne 0 ]; then
     STATUS="agent_error"
     echo "  ERROR: Agent failed without generating a patch."

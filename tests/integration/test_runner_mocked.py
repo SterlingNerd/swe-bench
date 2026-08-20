@@ -476,9 +476,14 @@ class MockDockerOpsDirect(MockDockerOps):
         instance_id = src_path.split("/")[-1]
         # Direct structure: files directly in dest_path (no instance_id subdirectory)
         (dest_path / "result.json").write_text(
-            '{"status": "patch_collected", "patch_bytes": 42}'
+            '{"status": "patch_collected", "patch_bytes": 42, "elapsed_seconds": 5}'
         )
         (dest_path / "patch.diff").write_text("diff --git a/test b/test\n+hello")
+        # Create entrypoint status files
+        (dest_path / ".status").write_text("patch_collected")
+        (dest_path / ".patch_size").write_text("42")
+        (dest_path / ".elapsed").write_text("5")
+        (dest_path / ".agent_exit_code").write_text("0")
         return True
 
 

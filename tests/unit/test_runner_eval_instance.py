@@ -126,27 +126,53 @@ class TestRunEvalInstance:
         instance_dir = output_dir / "django__django-11039"
         instance_dir.mkdir(parents=True)
         # No patch.diff file
-
-        result = runner.run_eval_instance(
-            agent="test-agent",
-            instance_id="django__django-11039",
-            output_dir=output_dir,
+        eval_dir = output_dir / "eval"
+        eval_dir.mkdir()
+        report_data = {
+            "resolved_ids": ["django__django-11039"],
+            "unresolved_ids": [],
+            "error_ids": [],
+        }
+        (eval_dir / "test-agent_django__django-11039.test-agent_django__django-11039.json").write_text(
+            json.dumps(report_data)
         )
-        assert result == {"status": "no_patch", "local_eval": None}
 
-    def test_empty_patch_returns_no_patch(self, runner: Runner, tmp_path: Path):
-        """Returns no_patch status when patch.diff is empty."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = runner.run_eval_instance(
+                agent="test-agent",
+                instance_id="django__django-11039",
+                output_dir=output_dir,
+            )
+
+        assert result == {"status": "completed", "local_eval": "resolved"}
+
+    def test_empty_patch_evaluates_empty_patch(self, runner: Runner, tmp_path: Path):
+        """Evaluates empty patch when patch.diff is empty."""
         output_dir = tmp_path / "test-agent"
         instance_dir = output_dir / "django__django-11039"
         instance_dir.mkdir(parents=True)
         (instance_dir / "patch.diff").write_text("")
-
-        result = runner.run_eval_instance(
-            agent="test-agent",
-            instance_id="django__django-11039",
-            output_dir=output_dir,
+        eval_dir = output_dir / "eval"
+        eval_dir.mkdir()
+        report_data = {
+            "resolved_ids": ["django__django-11039"],
+            "unresolved_ids": [],
+            "error_ids": [],
+        }
+        (eval_dir / "test-agent_django__django-11039.test-agent_django__django-11039.json").write_text(
+            json.dumps(report_data)
         )
-        assert result == {"status": "no_patch", "local_eval": None}
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = runner.run_eval_instance(
+                agent="test-agent",
+                instance_id="django__django-11039",
+                output_dir=output_dir,
+            )
+
+        assert result == {"status": "completed", "local_eval": "resolved"}
 
     def test_harness_success_resolved(self, runner: Runner, tmp_path: Path):
         """Returns resolved when harness reports the instance as resolved."""
@@ -286,19 +312,35 @@ class TestRunEvalInstance:
         temp_files = list(output_dir.glob(".tmp_predictions_*.jsonl"))
         assert len(temp_files) == 0
 
-    def test_cleans_up_temp_predictions_on_no_patch(self, runner: Runner, tmp_path: Path):
-        """Temp predictions file is not created when there's no patch (no cleanup needed)."""
+    def test_cleans_up_temp_predictions_on_empty_patch(self, runner: Runner, tmp_path: Path):
+        """Temp predictions file is cleaned up when patch is empty (now evaluated)."""
         output_dir = tmp_path / "test-agent"
         instance_dir = output_dir / "django__django-11039"
         instance_dir.mkdir(parents=True)
-        # No patch.diff
-
-        result = runner.run_eval_instance(
-            agent="test-agent",
-            instance_id="django__django-11039",
-            output_dir=output_dir,
+        # No patch.diff (empty patch)
+        eval_dir = output_dir / "eval"
+        eval_dir.mkdir()
+        report_data = {
+            "resolved_ids": ["django__django-11039"],
+            "unresolved_ids": [],
+            "error_ids": [],
+        }
+        (eval_dir / "test-agent_django__django-11039.test-agent_django__django-11039.json").write_text(
+            json.dumps(report_data)
         )
-        assert result == {"status": "no_patch", "local_eval": None}
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = runner.run_eval_instance(
+                agent="test-agent",
+                instance_id="django__django-11039",
+                output_dir=output_dir,
+            )
+
+        assert result == {"status": "completed", "local_eval": "resolved"}
+        # Temp file should be cleaned up
+        temp_files = list(output_dir.glob(".tmp_predictions_*.jsonl"))
+        assert len(temp_files) == 0
 
     def test_writes_correct_predictions_jsonl(self, runner: Runner, tmp_path: Path):
         """Predictions file has correct format before being cleaned up."""
