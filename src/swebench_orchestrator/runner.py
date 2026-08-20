@@ -1147,12 +1147,28 @@ class Runner:
 
         # Read patch from instance output directory
         patch_file = output_dir / instance_id / "patch.diff"
-        if not patch_file.exists() or patch_file.stat().st_size == 0:
-            logger.warning(
-                "Agent completed for %s but produced no patch (agent signaled completion without modifying files), skipping eval",
+        result_file = output_dir / instance_id / "result.json"
+        
+        # Check if patch is empty
+        patch_empty = not patch_file.exists() or patch_file.stat().st_size == 0
+        
+        # Read agent exit code from result.json
+        agent_exit_code = 0
+        if result_file.exists():
+            try:
+                result_data = read_json(result_file)
+                agent_exit_code = result_data.get("agent_exit_code", 0)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        
+        if patch_empty:
+            # Always evaluate empty patch - if bug already fixed, tests pass;
+            # if agent failed, harness will report eval_failed (valid result)
+            logger.info(
+                "Agent produced no patch for %s, evaluating empty patch",
                 instance_id,
             )
-            return {"status": "no_patch", "local_eval": None}
+            patch_content = ""
 
         # Create unique run_id to avoid report collisions
         run_id = f"{agent}_{instance_id}"
@@ -1160,7 +1176,8 @@ class Runner:
         # Write single-entry predictions.jsonl to a temp file
         preds_file = output_dir / f".tmp_predictions_{instance_id}.jsonl"
         try:
-            patch_content = patch_file.read_text()
+            if not patch_empty:
+                patch_content = patch_file.read_text()
             with open(preds_file, "w") as f:
                 f.write(json.dumps({
                     "instance_id": instance_id,
