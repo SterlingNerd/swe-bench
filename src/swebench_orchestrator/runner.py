@@ -917,16 +917,19 @@ class Runner:
             manifest = self.run_manager.create_run(agent=agent, timeout=timeout)
         return manifest.run_id, manifest
 
-    def run_all(
+    def run_instances(
         self,
         agent: str,
+        instance_ids: list[str],
         timeout: int = 3600,
+        run_id: str | None = None,
         resume: bool = False,
-    ) -> dict[str, Any]:
-        """Run an agent against all cached instances.
-
-        Before starting, waits for any previously running containers to finish
-        (safety net for interrupted runs).
+        pre_existing_success: int = 0,
+        pre_existing_no_answer: int = 0,
+        pre_existing_timeout: int = 0,
+        pre_existing_error: int = 0,
+    ) -> dict[str, int]:
+        """Run agent against a list of instances with work→eval→cleanup per instance.
 
         For each instance, interleaves:
         1. Work phase — run agent, produce patch
@@ -935,93 +938,60 @@ class Runner:
 
         Args:
             agent: Agent name.
+            instance_ids: List of instance IDs to run.
             timeout: Maximum runtime per instance.
+            run_id: Run ID for manifest tracking.
             resume: Skip instances that already have results.
+            pre_existing_success: Pre-existing resolved count (for stats logging).
+            pre_existing_no_answer: Pre-existing failed count (for stats logging).
+            pre_existing_timeout: Pre-existing timeout count (for stats logging).
+            pre_existing_error: Pre-existing error count (for stats logging).
 
         Returns:
-            Dict with live run statistics:
-            - total: total instances in dataset
-            - resolved: instances where eval passed
-            - no_answer: instances where eval failed (valid result)
-            - timeout: instances where work timed out
-            - error: instances with work/eval errors (should re-run)
-            - pending_eval: instances with patch but eval not run
-            - skipped: instances skipped due to --resume
-            - run: instances actually run in this invocation
+            Dict with counts: total, resolved, no_answer, timeout, error, skipped, run.
         """
-        # Safety net: wait for any stale containers from interrupted runs
-        logger.info("Waiting for any running %s containers to finish...", agent)
-        self.docker_ops.wait_for_agent_containers(agent, timeout_seconds=timeout)
-
         # Ensure a run manifest exists
-        run_id, _ = self._ensure_run(agent, timeout)
+        if run_id:
+            manifest = self.run_manager.resolve_run(agent, run_id)
+            if manifest is None:
+                raise ValueError(f"Run {run_id} not found for agent {agent}")
+        else:
+            manifest = self.run_manager.create_run(agent=agent, timeout=timeout)
+            run_id = manifest.run_id
 
-        # Get all instances from cache
-        dataset_cache = DatasetCache(self.config.cache_file)
-        instance_ids = [inst["instance_id"] for inst in dataset_cache.data]
         total = len(instance_ids)
-
-        # Read existing results to initialize stats
-        output_dir = self.config.output_dir / agent
         success = 0
         no_answer = 0
         timeout_count = 0
         error_count = 0
-        pending_eval = 0
-        pre_existing = 0
-        if output_dir.is_dir():
-            for instance_dir in output_dir.iterdir():
-                if not instance_dir.is_dir() or instance_dir.name in ("eval", "logs"):
-                    continue
-                result_file = instance_dir / "result.json"
-                if result_file.exists():
-                    pre_existing += 1
-                    try:
-                        from swebench_orchestrator.models import read_json
-                        meta = read_json(result_file)
-                        local_eval = _normalize_local_eval(meta.get("local_eval"))
-                        status = meta.get("status", "")
-                        if local_eval == "resolved":
-                            success += 1
-                        elif local_eval == "failed":
-                            no_answer += 1
-                        elif local_eval == "error":
-                            error_count += 1
-                        elif status == "timed_out":
-                            timeout_count += 1
-                        elif status == "patch_collected":
-                            # Patch generated but eval not run yet
-                            pending_eval += 1
-                        else:
-                            # Unknown status - count as error
-                            error_count += 1
-                    except (json.JSONDecodeError, ValueError):
-                        # Invalid JSON, count as error
-                        error_count += 1
-
-        count = 0
         skipped = 0
+        run_count = 0
 
-        for idx, iid in enumerate(instance_ids):
-            # Print stats at start of each instance
-            # completed = resolved + no_answer + timeout + error (not pending_eval)
-            completed = success + no_answer + timeout_count + error_count
+        for idx, iid in enumerate(instance_ids, 1):
+            # Stats: completed = resolved + no_answer + timeout + error (not pending)
+            completed = (pre_existing_success + success +
+                         pre_existing_no_answer + no_answer +
+                         pre_existing_timeout + timeout_count +
+                         pre_existing_error + error_count)
             logger.info(
-                "[%d/%d] %s | completed: %d | resolved: %d | no_answer: %d | timeout: %d | error: %d | pending: %d",
-                idx + 1, total, iid, completed, success, no_answer, timeout_count, error_count, pending_eval
+                "[%d/%d] %s | completed: %d | resolved: %d | no_answer: %d | timeout: %d | error: %d",
+                idx, total, iid,
+                completed,
+                pre_existing_success + success,
+                pre_existing_no_answer + no_answer,
+                pre_existing_timeout + timeout_count,
+                pre_existing_error + error_count,
             )
 
             if resume:
                 result_file = self.config.output_dir / agent / iid / "result.json"
                 if result_file.exists():
-                    # Already counted in initial scan, just skip
                     skipped += 1
                     continue
 
-            count += 1
+            run_count += 1
             try:
                 # Phase 1: Work — run agent, produce patch
-                # run_instance creates its own attempt and returns attempt_id
                 result = self.run_instance(agent, iid, timeout, run_id=run_id)
 
                 attempt_id = result.get("attempt_id")
@@ -1033,7 +1003,6 @@ class Runner:
 
                 if work_status == "timed_out":
                     timeout_count += 1
-                    # Update manifest with work result; skip eval on failure
                     self.run_manager.update_attempt_result(
                         run_id,
                         attempt_id,
@@ -1043,7 +1012,6 @@ class Runner:
                     continue
                 elif work_status in ("container_error", "copy_failed"):
                     error_count += 1
-                    # Update manifest with work result; skip eval on failure
                     self.run_manager.update_attempt_result(
                         run_id,
                         attempt_id,
@@ -1088,8 +1056,6 @@ class Runner:
                 elif local_eval == "error":
                     error_count += 1
 
-                # Image cleanup is now handled by run_instance
-
             except Exception as e:
                 logger.error("Failed to run %s: %s", iid, e)
                 error_count += 1
@@ -1100,10 +1066,98 @@ class Runner:
             "no_answer": no_answer,
             "timeout": timeout_count,
             "error": error_count,
-            "pending_eval": pending_eval,
             "skipped": skipped,
-            "run": count,
+            "run": run_count,
         }
+
+    def run_all(
+        self,
+        agent: str,
+        timeout: int = 3600,
+        resume: bool = False,
+    ) -> dict[str, Any]:
+        """Run an agent against all cached instances.
+
+        Before starting, waits for any previously running containers to finish
+        (safety net for interrupted runs).
+
+        Delegates to run_instances() with the full instance list from cache.
+
+        Args:
+            agent: Agent name.
+            timeout: Maximum runtime per instance.
+            resume: Skip instances that already have results.
+
+        Returns:
+            Dict with live run statistics.
+        """
+        # Safety net: wait for any stale containers from interrupted runs
+        logger.info("Waiting for any running %s containers to finish...", agent)
+        self.docker_ops.wait_for_agent_containers(agent, timeout_seconds=timeout)
+
+        # Get all instances from cache
+        dataset_cache = DatasetCache(self.config.cache_file)
+        instance_ids = [inst["instance_id"] for inst in dataset_cache.data]
+
+        # Read existing results to initialize stats
+        output_dir = self.config.output_dir / agent
+        success = 0
+        no_answer = 0
+        timeout_count = 0
+        error_count = 0
+        pending_eval = 0
+        pre_existing = 0
+        if output_dir.is_dir():
+            for instance_dir in output_dir.iterdir():
+                if not instance_dir.is_dir() or instance_dir.name in ("eval", "logs"):
+                    continue
+                result_file = instance_dir / "result.json"
+                if result_file.exists():
+                    pre_existing += 1
+                    try:
+                        from swebench_orchestrator.models import read_json
+                        meta = read_json(result_file)
+                        local_eval = _normalize_local_eval(meta.get("local_eval"))
+                        status = meta.get("status", "")
+                        if local_eval == "resolved":
+                            success += 1
+                        elif local_eval == "failed":
+                            no_answer += 1
+                        elif local_eval == "error":
+                            error_count += 1
+                        elif status == "timed_out":
+                            timeout_count += 1
+                        elif status == "patch_collected":
+                            # Patch generated but eval not run yet
+                            pending_eval += 1
+                        else:
+                            # Unknown status - count as error
+                            error_count += 1
+                    except (json.JSONDecodeError, ValueError):
+                        # Invalid JSON, count as error
+                        error_count += 1
+
+        # Run instances (skips already-done ones if --resume)
+        result = self.run_instances(
+            agent=agent,
+            instance_ids=instance_ids,
+            timeout=timeout,
+            resume=resume,
+            pre_existing_success=success,
+            pre_existing_no_answer=no_answer,
+            pre_existing_timeout=timeout_count,
+            pre_existing_error=error_count,
+        )
+
+        # Merge pre-existing counts into result
+        result["resolved"] += success
+        result["no_answer"] += no_answer
+        result["timeout"] += timeout_count
+        result["error"] += error_count
+        result["pending_eval"] = pending_eval
+        result["pre_existing"] = pre_existing
+
+        return result
 
     def summarize(self, agent: str) -> dict[str, Any]:
         """Summarize results for an agent.
